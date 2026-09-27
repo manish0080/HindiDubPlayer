@@ -33,7 +33,7 @@ jobs:
         run: |
           unzip -q HindiDubPlayer-starter.zip
           ls -la HindiDubPlayer
-          
+
       - name: Fix Kotlin for AGP 9
         run: |
           sed -i '/kotlin.android/d' HindiDubPlayer/app/build.gradle.kts

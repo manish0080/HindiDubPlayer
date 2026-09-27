@@ -35,14 +35,14 @@ jobs:
             unzip -q "$ZIP_FILE"
           fi
 
-      - name: Fix Kotlin Options
+      - name: Fix AGP 9 Kotlin Compatibility
         run: |
-          # jvmTarget ki purani incompatible lines ko clean karein
+          # AGP 9 ki requirement ke mutabik kotlin.android plugin aur puraane options ko clean karein
+          find . -name "build.gradle.kts" -exec sed -i '/kotlin.*android/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
 
       - name: Build Debug APK
         run: |
-          # Jahan project ki main files hain seedhe wahan jayein
           PROJECT_ROOT=$(find . -name "settings.gradle*" -exec dirname {} \; | head -1)
           if [ -z "$PROJECT_ROOT" ]; then
             PROJECT_ROOT="."

@@ -22,10 +22,10 @@ jobs:
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
 
-      - name: Setup Gradle
+      - name: Setup Gradle 9.5.0
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '9.5.0'
 
       - name: Unzip Starter Project
         run: |
@@ -33,25 +33,24 @@ jobs:
           if [ -n "$ZIP_FILE" ]; then
             echo "Extracting: $ZIP_FILE"
             unzip -q "$ZIP_FILE"
-          else
-            echo "No zip file found!"
           fi
-          ls -la
+
+      - name: Fix Kotlin Options
+        run: |
+          # jvmTarget ki purani incompatible lines ko clean karein
+          find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
 
       - name: Build Debug APK
         run: |
-          TARGET_DIR=$(find . -maxdepth 1 -type d -name "*Hindi*DubPlayer*" ! -name ".*" | head -1)
-          if [ -z "$TARGET_DIR" ]; then
-            TARGET_DIR="."
+          # Jahan project ki main files hain seedhe wahan jayein
+          PROJECT_ROOT=$(find . -name "settings.gradle*" -exec dirname {} \; | head -1)
+          if [ -z "$PROJECT_ROOT" ]; then
+            PROJECT_ROOT="."
           fi
-          echo "Building in directory: $TARGET_DIR"
-          cd "$TARGET_DIR"
-          chmod +x gradlew || true
-          if [ -f "./gradlew" ]; then
-            ./gradlew --no-daemon assembleDebug
-          else
-            gradle --no-daemon assembleDebug
-          fi
+          echo "Found Project Directory: $PROJECT_ROOT"
+          cd "$PROJECT_ROOT"
+
+          gradle --no-daemon assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

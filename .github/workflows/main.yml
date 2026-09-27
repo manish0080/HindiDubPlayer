@@ -19,8 +19,8 @@ jobs:
 
       - name: Setup Android SDK
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -29,10 +29,12 @@ jobs:
 
       - name: Unzip Starter Project
         run: |
-          if [ -f "HindiDubPlayer-starter.zip" ]; then
-            unzip -q "HindiDubPlayer-starter.zip"
-          elif [ -f "Hindi DubPlayer-starter.zip" ]; then
-            unzip -q "Hindi DubPlayer-starter.zip"
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -1)
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Extracting: $ZIP_FILE"
+            unzip -q "$ZIP_FILE"
+          else
+            echo "No zip file found!"
           fi
           ls -la
 

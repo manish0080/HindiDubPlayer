@@ -47,7 +47,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Clean Error-Free Engine
+      - name: Replace MainActivity With Fixed Clean Engine
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -1167,7 +1167,7 @@ jobs:
                       .setTitle("Choose Voice Mode")
                       .setItems(voiceNames) { _, which ->
                           voiceTypeIndex = which
-                          voicePillBtn.text = if (which == 0) "🎭 Auto ▼" else voiceNames[voiceTypeIndex].split(" ")[1] + " ▼"
+                          voicePillBtn.text = if (voiceTypeIndex == 0) "🎭 Auto ▼" else voiceNames[voiceTypeIndex].split(" ")[1] + " ▼"
                           getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit().putInt("VOICE_INDEX", voiceTypeIndex).apply()
                           Toast.makeText(this, "Voice: ${voiceNames[which]}", Toast.LENGTH_SHORT).show()
                       }
@@ -1697,7 +1697,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully updated with preserved local engine and 1% volume YouTube feed"
+          echo "MainActivity successfully compiled and updated"
 
       - name: Build Debug APK
         run: |
@@ -1712,5 +1712,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-SilentFeedLive-apk
+          name: HindiDubPlayer-BuildFix-apk
           path: "**/build/outputs/apk/debug/*.apk"

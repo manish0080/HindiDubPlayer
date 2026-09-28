@@ -47,7 +47,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Conflict-Free Engine
+      - name: Overwrite MainActivity with Clean Stable Engine
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -57,8 +57,12 @@ jobs:
           fi
 
           PACKAGE=$(grep -m1 '^package ' "$MAIN" | sed 's/^package //' || echo "com.manishtomar.hindidubplayer")
+          
+          rm -f "$MAIN"
+          NEW_MAIN_DIR=$(dirname "$MAIN")
+          TARGET_MAIN="$NEW_MAIN_DIR/MainActivity.kt"
 
-          cat << 'EOF' > "$MAIN"
+          cat << 'EOF' > "$TARGET_MAIN"
           package PACKAGE_NAME
 
           import android.annotation.SuppressLint
@@ -221,8 +225,8 @@ jobs:
 
               private val groqApiKey = "gsk_BNe4A96j6NLA" + "dcvlcAkAWGdyb3FY" + "itxb1szvztxpo3hH" + "1bQydBza"
 
-              private fun sizePx(dp: Int): Int {
-                  return (dp * resources.displayMetrics.density).toInt()
+              private fun dp(v: Int): Int {
+                  return (v * resources.displayMetrics.density).toInt()
               }
 
               @SuppressLint("SetJavaScriptEnabled")
@@ -258,7 +262,7 @@ jobs:
                       setBackgroundColor(Color.BLACK)
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
-                          sizePx(225)
+                          dp(225)
                       )
                   }
 
@@ -296,14 +300,14 @@ jobs:
                       setTextColor(Color.YELLOW)
                       setBackgroundColor(Color.parseColor("#99000000"))
                       gravity = Gravity.CENTER
-                      setPadding(sizePx(16), sizePx(8), sizePx(16), sizePx(8))
+                      setPadding(dp(16), dp(8), dp(16), dp(8))
                       visibility = View.GONE
                       val params = FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
                           FrameLayout.LayoutParams.WRAP_CONTENT,
                           Gravity.BOTTOM
                       )
-                      params.bottomMargin = sizePx(12)
+                      params.bottomMargin = dp(12)
                       layoutParams = params
                   }
                   videoContainer.addView(fullscreenSubtitleView)
@@ -312,8 +316,8 @@ jobs:
                       text = "▶ START LIVE DUBBING"
                       textSize = 14f
                       setTextColor(Color.WHITE)
-                      background = createRoundedDrawable(Color.parseColor("#FF5722"), sizePx(24).toFloat())
-                      setPadding(sizePx(20), sizePx(10), sizePx(20), sizePx(10))
+                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#FF5722")); cornerRadius = dp(24).toFloat() }
+                      setPadding(dp(20), dp(10), dp(20), dp(10))
                       visibility = View.GONE
                       layoutParams = FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -340,7 +344,7 @@ jobs:
 
                   val cardsContainer = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setPadding(sizePx(14), sizePx(12), sizePx(14), sizePx(16))
+                      setPadding(dp(14), dp(12), dp(14), dp(16))
                   }
 
                   val actionRow = LinearLayout(this).apply {
@@ -352,8 +356,8 @@ jobs:
                       text = "🔗 YouTube"
                       textSize = 11.5f
                       setTextColor(Color.WHITE)
-                      background = createRoundedDrawable(Color.parseColor("#CC0000"), sizePx(8).toFloat())
-                      setPadding(sizePx(12), sizePx(6), sizePx(12), sizePx(6))
+                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#CC0000")); cornerRadius = dp(8).toFloat() }
+                      setPadding(dp(12), dp(6), dp(12), dp(6))
                       setOnClickListener { showYouTubeInputDialog() }
                   }
                   actionRow.addView(ytBtn)
@@ -362,10 +366,10 @@ jobs:
                       text = "📁 Local"
                       textSize = 11.5f
                       setTextColor(Color.WHITE)
-                      background = createRoundedDrawable(Color.parseColor("#37474F"), sizePx(8).toFloat())
-                      setPadding(sizePx(12), sizePx(6), sizePx(12), sizePx(6))
+                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#37474F")); cornerRadius = dp(8).toFloat() }
+                      setPadding(dp(12), dp(6), dp(12), dp(6))
                       val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          marginStart = sizePx(6)
+                          marginStart = dp(6)
                       }
                       layoutParams = params
                       setOnClickListener { openVideoPicker() }
@@ -378,7 +382,7 @@ jobs:
                   val rewBtn = Button(this).apply {
                       text = "⏪ 10s"
                       textSize = 11f
-                      background = createRoundedDrawable(Color.parseColor("#ECEFF1"), sizePx(8).toFloat())
+                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#ECEFF1")); cornerRadius = dp(8).toFloat() }
                       setTextColor(Color.parseColor("#37474F"))
                       setOnClickListener {
                           if (isYoutubeMode) {
@@ -395,11 +399,11 @@ jobs:
                   playPauseBtn = Button(this).apply {
                       text = "⏯"
                       textSize = 13f
-                      background = createRoundedDrawable(Color.parseColor("#ECEFF1"), sizePx(8).toFloat())
+                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#ECEFF1")); cornerRadius = dp(8).toFloat() }
                       setTextColor(Color.parseColor("#37474F"))
-                      val params = LinearLayout.LayoutParams(sizePx(44), sizePx(38)).apply {
-                          marginStart = sizePx(6)
-                          marginEnd = sizePx(6)
+                      val params = LinearLayout.LayoutParams(dp(44), dp(38)).apply {
+                          marginStart = dp(6)
+                          marginEnd = dp(6)
                       }
                       layoutParams = params
                       setOnClickListener { togglePlayPause() }
@@ -409,7 +413,7 @@ jobs:
                   val fwdBtn = Button(this).apply {
                       text = "10s ⏩"
                       textSize = 11f
-                      background = createRoundedDrawable(Color.parseColor("#ECEFF1"), sizePx(8).toFloat())
+                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#ECEFF1")); cornerRadius = dp(8).toFloat() }
                       setTextColor(Color.parseColor("#37474F"))
                       setOnClickListener {
                           if (isYoutubeMode) {
@@ -426,10 +430,10 @@ jobs:
                   fullscreenBtn = Button(this).apply {
                       text = "⛶"
                       textSize = 13f
-                      background = createRoundedDrawable(Color.parseColor("#FF5722"), sizePx(8).toFloat())
+                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#FF5722")); cornerRadius = dp(8).toFloat() }
                       setTextColor(Color.WHITE)
-                      val params = LinearLayout.LayoutParams(sizePx(40), sizePx(38)).apply {
-                          marginStart = sizePx(6)
+                      val params = LinearLayout.LayoutParams(dp(40), dp(38)).apply {
+                          marginStart = dp(6)
                       }
                       layoutParams = params
                       setOnClickListener { toggleFullscreen() }
@@ -443,27 +447,27 @@ jobs:
                           LinearLayout.LayoutParams.MATCH_PARENT,
                           LinearLayout.LayoutParams.WRAP_CONTENT
                       ).apply {
-                          topMargin = sizePx(12)
-                          bottomMargin = sizePx(12)
+                          topMargin = dp(12)
+                          bottomMargin = dp(12)
                       }
                       layoutParams = params
                   }
 
                   val pillRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
-                  langPillBtn = createPillButton("🌐 $targetLangName ▼") { showLanguageSelector() }
+                  langPillBtn = makePillBtn("🌐 $targetLangName ▼") { showLanguageSelector() }
                   pillRow.addView(langPillBtn)
 
-                  voicePillBtn = createPillButton(if (voiceTypeIndex == 0) "🎭 Auto Voice ▼" else voiceNames[voiceTypeIndex].split(" ")[1] + " ▼") { showVoiceSelector() }
+                  voicePillBtn = makePillBtn(if (voiceTypeIndex == 0) "🎭 Auto Voice ▼" else voiceNames[voiceTypeIndex].split(" ")[1] + " ▼") { showVoiceSelector() }
                   pillRow.addView(voicePillBtn)
 
-                  speedPillBtn = createPillButton("⚡ ${currentPlaybackSpeed}x ▼") { showSpeedSelector() }
+                  speedPillBtn = makePillBtn("⚡ ${currentPlaybackSpeed}x ▼") { showSpeedSelector() }
                   pillRow.addView(speedPillBtn)
 
-                  stylePillBtn = createPillButton(if (dubStyleKey == "emotional") "🎭 इमोशनल ▼" else "📖 किताबी ▼") { showStyleSelector() }
+                  stylePillBtn = makePillBtn(if (dubStyleKey == "emotional") "🎭 इमोशनल ▼" else "📖 किताबी ▼") { showStyleSelector() }
                   pillRow.addView(stylePillBtn)
 
-                  val settingsPill = createPillButton("⚙️ Settings") { showSettingsDialog() }
+                  val settingsPill = makePillBtn("⚙️ Settings") { showSettingsDialog() }
                   pillRow.addView(settingsPill)
 
                   pillScroller.addView(pillRow)
@@ -475,7 +479,7 @@ jobs:
                       val params = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
                           LinearLayout.LayoutParams.WRAP_CONTENT
-                      ).apply { bottomMargin = sizePx(10) }
+                      ).apply { bottomMargin = dp(10) }
                       layoutParams = params
                   }
 
@@ -494,8 +498,8 @@ jobs:
                       text = "SPEAKER: NONE"
                       textSize = 10f
                       setTextColor(Color.WHITE)
-                      background = createRoundedDrawable(Color.parseColor("#78909C"), sizePx(4).toFloat())
-                      setPadding(sizePx(8), sizePx(2), sizePx(8), sizePx(2))
+                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#78909C")); cornerRadius = dp(4).toFloat() }
+                      setPadding(dp(8), dp(2), dp(8), dp(2))
                       visibility = View.GONE
                   }
                   infoBar.addView(speakerTagBadge)
@@ -503,12 +507,12 @@ jobs:
 
                   val originalCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      background = createCardDrawable(Color.WHITE, Color.parseColor("#CFD8DC"), sizePx(14).toFloat(), sizePx(1))
-                      setPadding(sizePx(16), sizePx(14), sizePx(16), sizePx(16))
+                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.WHITE); cornerRadius = dp(14).toFloat(); setStroke(1, Color.parseColor("#CFD8DC")) }
+                      setPadding(dp(16), dp(14), dp(16), dp(16))
                       val params = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
                           LinearLayout.LayoutParams.WRAP_CONTENT
-                      ).apply { bottomMargin = sizePx(12) }
+                      ).apply { bottomMargin = dp(12) }
                       layoutParams = params
                   }
 
@@ -518,7 +522,7 @@ jobs:
                       setTextColor(Color.parseColor("#90A4AE"))
                       setTypeface(null, Typeface.BOLD)
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = sizePx(6)
+                          bottomMargin = dp(6)
                       }
                       layoutParams = p
                   }
@@ -535,12 +539,12 @@ jobs:
 
                   val translatedCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      background = createCardDrawable(Color.parseColor("#FFF8E1"), Color.parseColor("#FFE082"), sizePx(14).toFloat(), sizePx(1))
-                      setPadding(sizePx(16), sizePx(14), sizePx(16), sizePx(16))
+                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#FFF8E1")); cornerRadius = dp(14).toFloat(); setStroke(1, Color.parseColor("#FFE082")) }
+                      setPadding(dp(16), dp(14), dp(16), dp(16))
                       val params = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
                           LinearLayout.LayoutParams.WRAP_CONTENT
-                      ).apply { bottomMargin = sizePx(16) }
+                      ).apply { bottomMargin = dp(16) }
                       layoutParams = params
                   }
 
@@ -550,7 +554,7 @@ jobs:
                       setTextColor(Color.parseColor("#FF8F00"))
                       setTypeface(null, Typeface.BOLD)
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = sizePx(6)
+                          bottomMargin = dp(6)
                       }
                       layoutParams = p
                   }
@@ -587,6 +591,18 @@ jobs:
 
                   handleIncomingShareIntent(intent)
                   startTimestampConsumerLoop()
+              }
+
+              private fun makePillBtn(title: String, onClick: () -> Unit): Button {
+                  return Button(this).apply {
+                      text = title
+                      textSize = 10f
+                      setTextColor(Color.parseColor("#37474F"))
+                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.WHITE); cornerRadius = dp(16).toFloat(); setStroke(1, Color.parseColor("#CFD8DC")) }
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)).apply { marginEnd = dp(8) }
+                      setPadding(dp(12), 0, dp(12), 0)
+                      setOnClickListener { onClick() }
+                  }
               }
 
               override fun onNewIntent(intent: Intent?) {
@@ -1010,26 +1026,6 @@ jobs:
                       .trim()
               }
 
-              private fun createRoundedDrawable(bgColor: Int, cornerRadius: Float): GradientDrawable {
-                  return GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(bgColor); this.cornerRadius = cornerRadius }
-              }
-
-              private fun createCardDrawable(bgColor: Int, strokeColor: Int, cornerRadius: Float, strokeWidth: Int): GradientDrawable {
-                  return GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(bgColor); this.cornerRadius = cornerRadius; setStroke(strokeWidth, strokeColor) }
-              }
-
-              private fun createPillButton(title: String, onClick: () -> Unit): Button {
-                  return Button(this).apply {
-                      text = title
-                      textSize = 10f
-                      setTextColor(Color.parseColor("#37474F"))
-                      background = createCardDrawable(Color.WHITE, Color.parseColor("#CFD8DC"), sizePx(16).toFloat(), sizePx(1))
-                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, sizePx(34)).apply { marginEnd = sizePx(8) }
-                      setPadding(sizePx(12), 0, sizePx(12), 0)
-                      setOnClickListener { onClick() }
-                  }
-              }
-
               private fun toggleFullscreen() {
                   isFullscreen = !isFullscreen
                   if (isFullscreen) {
@@ -1043,7 +1039,7 @@ jobs:
                       requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                       window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
                       mainScrollView.visibility = View.VISIBLE
-                      videoContainer.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, sizePx(225))
+                      videoContainer.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(225))
                       fullscreenSubtitleView.visibility = View.GONE
                       fullscreenBtn.text = "⛶"
                   }
@@ -1644,45 +1640,6 @@ jobs:
                   tts?.speak(safeText, TextToSpeech.QUEUE_FLUSH, params, "dub_${System.currentTimeMillis()}")
               }
 
-              private fun createRoundedDrawable(bgColor: Int, cornerRadius: Float): GradientDrawable {
-                  return GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(bgColor); this.cornerRadius = cornerRadius }
-              }
-
-              private fun createCardDrawable(bgColor: Int, strokeColor: Int, cornerRadius: Float, strokeWidth: Int): GradientDrawable {
-                  return GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(bgColor); this.cornerRadius = cornerRadius; setStroke(strokeWidth, strokeColor) }
-              }
-
-              private fun createPillButton(title: String, onClick: () -> Unit): Button {
-                  return Button(this).apply {
-                      text = title
-                      textSize = 10f
-                      setTextColor(Color.parseColor("#37474F"))
-                      background = createCardDrawable(Color.WHITE, Color.parseColor("#CFD8DC"), sizePx(16).toFloat(), sizePx(1))
-                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, sizePx(34)).apply { marginEnd = sizePx(8) }
-                      setPadding(sizePx(12), 0, sizePx(12), 0)
-                      setOnClickListener { onClick() }
-                  }
-              }
-
-              private fun toggleFullscreen() {
-                  isFullscreen = !isFullscreen
-                  if (isFullscreen) {
-                      requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                      window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN)
-                      mainScrollView.visibility = View.GONE
-                      videoContainer.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT)
-                      fullscreenSubtitleView.visibility = View.VISIBLE
-                      fullscreenBtn.text = "⤓"
-                  } else {
-                      requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                      window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
-                      mainScrollView.visibility = View.VISIBLE
-                      videoContainer.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, sizePx(225))
-                      fullscreenSubtitleView.visibility = View.GONE
-                      fullscreenBtn.text = "⛶"
-                  }
-              }
-
               override fun onPause() { saveCurrentPosition(); super.onPause() }
               override fun onDestroy() {
                   saveCurrentPosition()
@@ -1696,8 +1653,8 @@ jobs:
               }
           }
           EOF
-          sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully updated with sizePx helper"
+          sed -i "s/PACKAGE_NAME/$PACKAGE/" "$TARGET_MAIN"
+          echo "MainActivity successfully reset and built without conflicts"
 
       - name: Build Debug APK
         run: |
@@ -1712,5 +1669,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-FinalFix-apk
+          name: HindiDubPlayer-CleanReset-apk
           path: "**/build/outputs/apk/debug/*.apk"

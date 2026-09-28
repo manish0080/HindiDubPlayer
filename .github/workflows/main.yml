@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Proportioned Speed Dubber
+      - name: Replace MainActivity With TightCadence Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -492,14 +492,13 @@ jobs:
                   }
               }
 
-              // RATIO ADJUSTMENT: Video is set to 0.90x of selected speed to give audio headroom
+              // EXACT PROPORTIONAL SPEED: 0.96x provides a tight ~4% buffer without noticeable video slowdown
               private fun applyVideoPlaybackSpeed() {
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                       try {
                           mediaPlayerRef?.let { mp ->
                               val params = mp.playbackParams ?: PlaybackParams()
-                              // Proportional slowdown: 0.90x gives 10-15% natural breathing buffer
-                              val adjustedVideoSpeed = (currentPlaybackSpeed * 0.90f).coerceIn(0.5f, 2.5f)
+                              val adjustedVideoSpeed = (currentPlaybackSpeed * 0.96f).coerceIn(0.5f, 2.5f)
                               params.speed = adjustedVideoSpeed
                               mp.playbackParams = params
                           }
@@ -523,7 +522,7 @@ jobs:
 
                           applyVideoPlaybackSpeed()
                           applyVoicePreset()
-                          Toast.makeText(this, "Speed: ${currentPlaybackSpeed}x (Video: ${(currentPlaybackSpeed * 0.90f)}x, Voice: ${(1.12f * currentPlaybackSpeed)}x)", Toast.LENGTH_SHORT).show()
+                          Toast.makeText(this, "Speed set to ${currentPlaybackSpeed}x", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
                       .show()
@@ -601,7 +600,7 @@ jobs:
                   }
               }
 
-              // AUDIO SPEED: Set to 1.12x base rate so speech finishes slightly before video scene ends
+              // SPEECH RATE: Calibrated at 1.06x base rate for smooth, non-rushed dialogs across all speeds
               private fun applyVoicePreset() {
                   try {
                       val voices = tts?.voices ?: emptySet()
@@ -622,28 +621,28 @@ jobs:
                       } ?: langVoices.firstOrNull { it.name.contains("c-local", true) || it.name.contains("a-local", true) }
 
                       var basePitch = 1.0f
-                      var baseRate = 1.12f // 1.12x base rate guarantees dialogue finishes cleanly
+                      var baseRate = 1.06f
 
                       when (voiceTypeIndex) {
                           0 -> { // Man
                               if (maleVoice != null) tts?.voice = maleVoice
                               basePitch = 0.75f
-                              baseRate = 1.14f
+                              baseRate = 1.08f
                           }
                           1 -> { // Woman
                               if (femaleVoice != null) tts?.voice = femaleVoice
                               basePitch = 1.00f
-                              baseRate = 1.10f
+                              baseRate = 1.05f
                           }
                           2 -> { // Boy
                               if (maleVoice != null) tts?.voice = maleVoice
                               basePitch = 1.18f
-                              baseRate = 1.15f
+                              baseRate = 1.10f
                           }
                           3 -> { // Girl
                               if (femaleVoice != null) tts?.voice = femaleVoice
                               basePitch = 1.38f
-                              baseRate = 1.10f
+                              baseRate = 1.05f
                           }
                       }
 
@@ -651,7 +650,7 @@ jobs:
                       tts?.setSpeechRate(baseRate * currentPlaybackSpeed)
 
                   } catch (e: Exception) {
-                      tts?.setSpeechRate(1.12f * currentPlaybackSpeed)
+                      tts?.setSpeechRate(1.06f * currentPlaybackSpeed)
                   }
               }
 
@@ -669,12 +668,12 @@ jobs:
                               isSpeechActive.set(false)
                               lastSpeechEndTimeMs = System.currentTimeMillis()
 
-                              // Clear subtitle 500ms after speech ends
+                              // Subtitle clears quickly in 250ms after speech ends
                               uiHandler.postDelayed({
                                   if (!isSpeechActive.get()) {
                                       subtitleOverlay.text = ""
                                   }
-                              }, 500)
+                              }, 250)
                           }
 
                           override fun onError(utteranceId: String?) {
@@ -692,8 +691,7 @@ jobs:
                       "Target: $targetLangName ($targetLangCode)",
                       "Voice: ${voiceNames[voiceTypeIndex]}",
                       "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Formal"}",
-                      "Speed: ${currentPlaybackSpeed}x (Video: ${(currentPlaybackSpeed * 0.90f)}x, Voice: ${(1.12f * currentPlaybackSpeed)}x)",
-                      "Status: Ratio Calibration Active (Zero Cut-Off)",
+                      "Speed: ${currentPlaybackSpeed}x (Calibrated Cadence)",
                       "Stop Dubbing"
                   )
                   AlertDialog.Builder(this)
@@ -704,8 +702,7 @@ jobs:
                               1 -> showVoiceSelector()
                               2 -> showStyleSelector()
                               3 -> showSpeedSelector()
-                              4 -> Toast.makeText(this, "0.90x Video & 1.12x Audio creates a natural dialogue buffer", Toast.LENGTH_LONG).show()
-                              5 -> {
+                              4 -> {
                                   isProcessing.set(false)
                                   tts?.stop()
                                   isSpeechActive.set(false)
@@ -785,7 +782,7 @@ jobs:
                   }.start()
               }
 
-              // SYNCHRONIZED TIMELINE CONSUMER: Guarantees Sentence 1 completes 100% + enforces 400ms pause!
+              // TIGHT CADENCE CONSUMER: Gap reduced to a crisp 100-160ms across all speeds
               private fun startTimestampConsumerLoop() {
                   uiHandler.postDelayed(object : Runnable {
                       override fun run() {
@@ -793,13 +790,13 @@ jobs:
                               val curPos = videoView.currentPosition.toLong()
                               val now = System.currentTimeMillis()
 
-                              // Natural breathing gap between sentences (minimum 350ms, scaled with speed)
-                              val naturalGapMs = (400L / currentPlaybackSpeed).toLong().coerceAtLeast(300L)
+                              // Crisp micro-gap (160ms at 1.0x, down to 90ms at 2.0x)
+                              val tightGapMs = (160L / currentPlaybackSpeed).toLong().coerceIn(90L, 160L)
 
                               val isBusySpeaking = isSpeechActive.get() || (tts?.isSpeaking == true)
 
-                              // Trigger next dialogue ONLY if current speech is 100% done AND natural gap has passed
-                              if (!isBusySpeaking && (now - lastSpeechEndTimeMs >= naturalGapMs)) {
+                              // Trigger next dialogue only after previous speech is 100% complete and tight micro-gap has passed
+                              if (!isBusySpeaking && (now - lastSpeechEndTimeMs >= tightGapMs)) {
                                   for (segment in timelineDubQueue) {
                                       if (!segment.isTriggered && curPos >= segment.startMs - 200L) {
                                           if (curPos <= segment.endMs + 3500L) {
@@ -812,7 +809,7 @@ jobs:
                                               speakDubbed(segment.translatedText)
                                               break
                                           } else {
-                                              segment.isTriggered = true // Passed segment
+                                              segment.isTriggered = true
                                           }
                                       }
                                   }
@@ -820,9 +817,9 @@ jobs:
 
                               timelineDubQueue.removeIf { it.isTriggered && curPos > it.endMs + 8000L }
                           }
-                          uiHandler.postDelayed(this, 50)
+                          uiHandler.postDelayed(this, 40) // 40ms high-resolution polling
                       }
-                  }, 50)
+                  }, 40)
               }
 
               private fun populateAccountModels(apiKey: String) {
@@ -1006,7 +1003,6 @@ jobs:
 
                           val currentVideoPos = videoView.currentPosition.toLong()
 
-                          // Maintain 15-20s buffer
                           if (!isSeeking.get() && nextProducerPosMs - currentVideoPos > 18000L) {
                               Thread.sleep(300)
                               continue
@@ -1016,7 +1012,6 @@ jobs:
                           val extractStart = nextProducerPosMs
                           val extractEnd = extractStart + chunkDuration
 
-                          // 1. Session Cache Check
                           val cachedInWindow = sessionCacheMap.values
                               .filter { it.startMs in (extractStart - 1000L)..extractEnd }
                               .sortedBy { it.startMs }
@@ -1043,7 +1038,6 @@ jobs:
                               continue
                           }
 
-                          // 2. Safe rate limit throttle
                           val elapsed = System.currentTimeMillis() - lastGroqCallTime
                           if (elapsed < 3000L) {
                               Thread.sleep(3000L - elapsed)
@@ -1380,7 +1374,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with 0.90x Video and 1.12x Audio Ratio Calibration"
+          echo "MainActivity updated with tight micro-gaps and proportional speed calibration"
 
       - name: Build Debug APK
         run: |
@@ -1395,5 +1389,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-RatioCalibrated-apk
+          name: HindiDubPlayer-TightCadence-apk
           path: "**/build/outputs/apk/debug/*.apk"

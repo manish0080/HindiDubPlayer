@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Ultimate Pro Dubber
+      - name: Replace MainActivity With Hardware Voice Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -71,6 +71,7 @@ jobs:
           import android.os.Bundle
           import android.os.ParcelFileDescriptor
           import android.speech.tts.TextToSpeech
+          import android.speech.tts.Voice
           import android.view.Gravity
           import android.view.View
           import android.widget.Button
@@ -138,7 +139,7 @@ jobs:
               )
 
               private val voiceNames = arrayOf(
-                  "🎙️ Man (गंभीर पुरुष)",
+                  "🎙️ Man (कड़क मर्द)",
                   "🎙️ Woman (महिला)",
                   "🎙️ Boy (लड़का)",
                   "🎙️ Girl (लड़की)"
@@ -327,7 +328,8 @@ jobs:
                               .apply()
 
                           setTtsLocale(targetLangCode)
-                          Toast.makeText(this, "Language saved: $targetLangName", Toast.LENGTH_SHORT).show()
+                          applyVoicePreset()
+                          Toast.makeText(this, "Language: $targetLangName", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
                       .show()
@@ -343,6 +345,7 @@ jobs:
                           val prefs = getSharedPreferences("DubSettings", Context.MODE_PRIVATE)
                           prefs.edit().putInt("VOICE_INDEX", voiceTypeIndex).apply()
 
+                          applyVoicePreset()
                           Toast.makeText(this, "Voice: ${voiceNames[which]}", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
@@ -374,23 +377,49 @@ jobs:
               }
 
               private fun applyVoicePreset() {
-                  when (voiceTypeIndex) {
-                      0 -> { // Man: deep, grounded
-                          tts?.setPitch(0.80f)
-                          tts?.setSpeechRate(0.95f)
+                  try {
+                      val voices = tts?.voices ?: emptySet()
+                      val langVoices = voices.filter { it.locale.language.equals(targetLangCode, ignoreCase = true) }
+
+                      val maleVoice = langVoices.firstOrNull { 
+                          it.name.contains("male", true) || 
+                          it.name.contains("hid", true) || 
+                          it.name.contains("hie", true) ||
+                          it.name.contains("man", true)
+                      } ?: langVoices.firstOrNull { it.name.contains("d-local", true) || it.name.contains("e-local", true) }
+
+                      val femaleVoice = langVoices.firstOrNull { 
+                          it.name.contains("female", true) || 
+                          it.name.contains("hic", true) || 
+                          it.name.contains("hia", true) ||
+                          it.name.contains("woman", true)
+                      } ?: langVoices.firstOrNull { it.name.contains("c-local", true) || it.name.contains("a-local", true) }
+
+                      when (voiceTypeIndex) {
+                          0 -> { // Man: कड़क और गहरा मर्द (Deep solid base) + 1.10x Speech Rate
+                              if (maleVoice != null) tts?.voice = maleVoice
+                              tts?.setPitch(0.75f)
+                              tts?.setSpeechRate(1.10f)
+                          }
+                          1 -> { // Woman: साफ़ महिला + 1.10x Speech Rate
+                              if (femaleVoice != null) tts?.voice = femaleVoice
+                              tts?.setPitch(1.00f)
+                              tts?.setSpeechRate(1.10f)
+                          }
+                          2 -> { // Boy: जवान लड़का + 1.12x Speech Rate
+                              if (maleVoice != null) tts?.voice = maleVoice
+                              tts?.setPitch(1.18f)
+                              tts?.setSpeechRate(1.12f)
+                          }
+                          3 -> { // Girl / Child: लड़की + 1.10x Speech Rate
+                              if (femaleVoice != null) tts?.voice = femaleVoice
+                              tts?.setPitch(1.38f)
+                              tts?.setSpeechRate(1.10f)
+                          }
                       }
-                      1 -> { // Woman: clear, natural
-                          tts?.setPitch(1.05f)
-                          tts?.setSpeechRate(1.00f)
-                      }
-                      2 -> { // Boy: energetic young
-                          tts?.setPitch(1.25f)
-                          tts?.setSpeechRate(1.05f)
-                      }
-                      3 -> { // Girl / Child: soft high
-                          tts?.setPitch(1.45f)
-                          tts?.setSpeechRate(1.00f)
-                      }
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                      tts?.setSpeechRate(1.10f)
                   }
               }
 
@@ -406,7 +435,7 @@ jobs:
                   val options = arrayOf(
                       "Target: $targetLangName ($targetLangCode)",
                       "Voice: ${voiceNames[voiceTypeIndex]}",
-                      "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Textbook Formal"}",
+                      "Style: ${if (dubStyleKey == "emotional") "Emotional (Natural)" else "Textbook (Formal)"}",
                       "Active AI Model: $model",
                       "Processed: $processedSegments parts",
                       "View Last Error Details",
@@ -456,7 +485,7 @@ jobs:
                       videoView.setVideoURI(uri)
                       videoView.seekTo(1)
 
-                      statusText.text = "Video ready! Tap 'START LIVE DUBBING'."
+                      statusText.text = "Video loaded! Tap 'START LIVE DUBBING'."
                       centerStartBtn.visibility = View.VISIBLE
                   }
               }
@@ -560,7 +589,7 @@ jobs:
 
                       while (hasMoreAudio && isProcessing.get()) {
 
-                          // Instant jump if user skipped to 2.5 hours etc.
+                          // Instant jump if user skipped to 2.5 hours
                           val targetSeek = seekTargetUs.getAndSet(-1L)
                           if (targetSeek >= 0) {
                               extractor.seekTo(targetSeek, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
@@ -815,9 +844,9 @@ jobs:
                   }
 
                   val systemPrompt = if (style == "emotional") {
-                      "You are a professional anime, comic and movie voice dubbing artist. Translate the dialogue into natural, emotionally expressive spoken $targetLang. Match the character's emotion (anger, humor, shock, urgency). Use natural everyday spoken vocabulary, NOT robotic, literal or textbook words. Output ONLY the translated sentence in the native script of $targetLang. No notes or extra text."
+                      "You are a professional anime, comic and movie voice dubber. Translate the dialogue into natural, highly expressive spoken $targetLang with human emotion. Use pauses (...) and commas (,) naturally. Keep the translation concise, punchy and tight so it finishes speaking within the video tempo. Output ONLY the translated sentence in the script of $targetLang. No notes or explanations."
                   } else {
-                      "You are a precise textbook translator. Translate the dialogue into formal, grammatically strict, and literal $targetLang. Use polite and standard formal vocabulary. Output ONLY the translated sentence in the native script of $targetLang. No notes or extra text."
+                      "You are a precise textbook translator. Translate the dialogue into formal, grammatically strict, and literal $targetLang. Keep sentences concise so they finish speaking on time. Output ONLY the translated sentence in the script of $targetLang. No notes or extra text."
                   }
 
                   val payload = JSONObject().apply {
@@ -858,7 +887,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with Full Pro Features"
+          echo "MainActivity updated with Realistic Hardware Voices and 1.10x Pacing"
 
       - name: Build Debug APK
         run: |
@@ -873,5 +902,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-ProFeatures-apk
+          name: HindiDubPlayer-RealisticVoices-apk
           path: "**/build/outputs/apk/debug/*.apk"

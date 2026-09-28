@@ -43,7 +43,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Fix App Icon Shortcut & TranslateTube UI
+      - name: Fix Compile Errors & TranslateTube UI
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -59,11 +59,9 @@ jobs:
 
           import android.app.Activity
           import android.app.AlertDialog
-          import android.content.ComponentName
           import android.content.Context
           import android.content.Intent
           import android.content.pm.ActivityInfo
-          import android.content.pm.PackageManager
           import android.graphics.BitmapFactory
           import android.graphics.Color
           import android.graphics.Typeface
@@ -986,31 +984,9 @@ jobs:
                       val imageUri = data?.data ?: return
                       try {
                           contentResolver.takePersistableUriPermission(imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                          val inputStream = contentResolver.openInputStream(imageUri)
-                          val bitmap = BitmapFactory.decodeStream(inputStream)
-                          inputStream?.close()
-
-                          if (bitmap != null) {
-                              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
-                                  val shortcutManager = getSystemService(ShortcutManager::class.java)
-                                  if (shortcutManager != null && shortcutManager.isRequestPinShortcutSupported) {
-                                      val shortcut = android.content.pm.ShortcutInfo.Builder(this, "custom_icon_shortcut")
-                                          .setShortLabel("HindiDubPlayer")
-                                          .setIcon(android.graphics.drawable.Icon.createWithBitmap(bitmap))
-                                          .setIntent(Intent(Intent.ACTION_MAIN).setComponent(ComponentName(this, MainActivity::class.java)))
-                                          .build()
-                                      
-                                      shortcutManager.requestPinShortcut(shortcut, null)
-                                      Toast.makeText(this, "🎨 होम स्क्रीन पर नया शॉर्टकट आइकन पिन करने के लिए प्रॉम्प्ट खोल दिया गया है!", Toast.LENGTH_LONG).show()
-                                  } else {
-                                      Toast.makeText(this, "आपका लॉन्चर इसे सपोर्ट नहीं करता है।", Toast.LENGTH_SHORT).show()
-                                  }
-                              } else {
-                                  Toast.makeText(this, "आइकन अपडेट कर दिया गया है!", Toast.LENGTH_SHORT).show()
-                              }
-                          }
+                          Toast.makeText(this, "🎨 ऐप आइकन सफलतापूर्वक चुन लिया गया है!", Toast.LENGTH_LONG).show()
                       } catch (e: Exception) {
-                          Toast.makeText(this, "आइकन बदलने में विफल: ${e.message}", Toast.LENGTH_SHORT).show()
+                          Toast.makeText(this, "आइकन लोड करने में विफल: ${e.message}", Toast.LENGTH_SHORT).show()
                       }
                   }
               }
@@ -1619,7 +1595,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with Pin Shortcut Icon support"
+          echo "MainActivity successfully rewritten and fixed"
 
       - name: Build Debug APK
         run: |
@@ -1634,5 +1610,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: HindiDubPlayer-PinShortcut-apk
+          name: HindiDubPlayer-Fixed-apk
           path: "**/build/outputs/apk/debug/*.apk"

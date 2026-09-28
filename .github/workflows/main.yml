@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Auto AI Dubbing
+      - name: Replace MainActivity With Realtime Chunk Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -75,24 +75,22 @@ jobs:
           import android.widget.VideoView
           import org.json.JSONArray
           import org.json.JSONObject
-          import java.io.BufferedReader
           import java.io.DataOutputStream
           import java.io.File
           import java.io.FileInputStream
-          import java.io.InputStreamReader
           import java.net.HttpURLConnection
           import java.net.URL
           import java.nio.ByteBuffer
           import java.util.Locale
+          import java.util.concurrent.atomic.AtomicBoolean
 
           class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
               private lateinit var videoView: VideoView
               private lateinit var status: TextView
               private var tts: TextToSpeech? = null
-              private var mediaPlayer: MediaPlayer? = null
+              private var isProcessing = AtomicBoolean(false)
 
-              // Securely concatenated API Key (No input box needed)
               private val groqApiKey = "gsk_BNe4A96j6NLA" + "dcvlcAkAWGdyb3FY" + "itxb1szvztxpo3hH" + "1bQydBza"
 
               override fun onCreate(savedInstanceState: Bundle?) {
@@ -107,15 +105,15 @@ jobs:
                   }
 
                   val title = TextView(this).apply {
-                      text = "Hindi DubPlayer AI"
+                      text = "Hindi DubPlayer Live"
                       textSize = 24f
                       gravity = Gravity.CENTER
                   }
                   layout.addView(title)
 
                   status = TextView(this).apply {
-                      text = "Tap below to select an English video"
-                      textSize = 15f
+                      text = "Select any long video (Instant 1-sec dubbing)"
+                      textSize = 14f
                       gravity = Gravity.CENTER
                       setPadding(0, 16, 0, 16)
                   }
@@ -141,8 +139,7 @@ jobs:
                   videoView.setMediaController(controller)
 
                   videoView.setOnPreparedListener { mp ->
-                      mediaPlayer = mp
-                      mp.setVolume(0f, 0f) // Original English Audio Muted (0%)
+                      mp.setVolume(0f, 0f) // Original English Muted (0%)
                   }
 
                   button.setOnClickListener {
@@ -171,101 +168,129 @@ jobs:
                   if (requestCode == 100 && resultCode == RESULT_OK) {
                       val uri = data?.data ?: return
 
+                      isProcessing.set(false)
+                      tts?.stop()
+
                       videoView.setVideoURI(uri)
                       videoView.seekTo(1)
 
-                      status.text = "Step 1/3: Extracting audio..."
+                      status.text = "Pre-buffering first 10-sec chunk..."
+                      isProcessing.set(true)
 
                       Thread {
-                          try {
-                              val audioFile = extractAudio(uri)
-                              if (audioFile == null || !audioFile.exists()) {
-                                  updateStatus("Audio extraction failed")
-                                  return@Thread
-                              }
-
-                              updateStatus("Step 2/3: Speech-to-Text (Whisper AI)...")
-                              val englishText = transcribeAudio(audioFile, groqApiKey)
-
-                              updateStatus("Step 3/3: Translating to Hindi (Llama 3)...")
-                              val hindiText = translateToHindi(englishText, groqApiKey)
-
-                              runOnUiThread {
-                                  status.text = "Dubbed in Hindi ✓\n\n$hindiText"
-                                  videoView.seekTo(0)
-                                  videoView.start()
-                                  tts?.speak(hindiText, TextToSpeech.QUEUE_FLUSH, null, "dub_id")
-                              }
-
-                          } catch (e: Exception) {
-                              updateStatus("Error: ${e.localizedMessage}")
-                          }
+                          startLiveStreamingPipeline(uri)
                       }.start()
                   }
               }
 
-              private fun updateStatus(msg: String) {
-                  runOnUiThread { status.text = msg }
-              }
-
-              private fun extractAudio(uri: Uri): File? {
+              private fun startLiveStreamingPipeline(uri: Uri) {
                   val extractor = MediaExtractor()
                   try {
                       contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
                           extractor.setDataSource(pfd.fileDescriptor)
-                      } ?: return null
+                      } ?: return
 
-                      var audioTrack = -1
+                      var audioTrackIndex = -1
                       var audioFormat: MediaFormat? = null
 
                       for (i in 0 until extractor.trackCount) {
                           val format = extractor.getTrackFormat(i)
                           val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
                           if (mime.startsWith("audio/")) {
-                              audioTrack = i
+                              audioTrackIndex = i
                               audioFormat = format
                               break
                           }
                       }
 
-                      if (audioTrack < 0 || audioFormat == null) {
+                      if (audioTrackIndex < 0 || audioFormat == null) {
+                          runOnUiThread { status.text = "No audio track found in video" }
                           extractor.release()
-                          return null
+                          return
                       }
 
-                      extractor.selectTrack(audioTrack)
-                      val outputFile = File(cacheDir, "extracted_audio.m4a")
-                      if (outputFile.exists()) outputFile.delete()
+                      extractor.selectTrack(audioTrackIndex)
 
-                      val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-                      val muxerTrack = muxer.addTrack(audioFormat)
-                      muxer.start()
-
+                      val chunkDurationUs = 10_000_000L // 10 seconds chunk
+                      var chunkIndex = 0
+                      var hasMoreAudio = true
                       val buffer = ByteBuffer.allocate(1024 * 1024)
                       val bufferInfo = MediaCodec.BufferInfo()
 
-                      while (true) {
-                          val sampleSize = extractor.readSampleData(buffer, 0)
-                          if (sampleSize < 0) break
+                      while (hasMoreAudio && isProcessing.get()) {
+                          val chunkFile = File(cacheDir, "chunk_$chunkIndex.m4a")
+                          if (chunkFile.exists()) chunkFile.delete()
 
-                          bufferInfo.offset = 0
-                          bufferInfo.size = sampleSize
-                          bufferInfo.presentationTimeUs = extractor.sampleTime
-                          bufferInfo.flags = extractor.sampleFlags
+                          val muxer = MediaMuxer(chunkFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                          val muxerTrack = muxer.addTrack(audioFormat)
+                          muxer.start()
 
-                          muxer.writeSampleData(muxerTrack, buffer, bufferInfo)
-                          extractor.advance()
+                          var chunkStartPts = -1L
+                          var currentChunkPts = 0L
+
+                          while (isProcessing.get()) {
+                              val sampleSize = extractor.readSampleData(buffer, 0)
+                              if (sampleSize < 0) {
+                                  hasMoreAudio = false
+                                  break
+                              }
+
+                              val pts = extractor.sampleTime
+                              if (chunkStartPts == -1L) chunkStartPts = pts
+
+                              currentChunkPts = pts - chunkStartPts
+                              if (currentChunkPts >= chunkDurationUs) {
+                                  break
+                              }
+
+                              bufferInfo.offset = 0
+                              bufferInfo.size = sampleSize
+                              bufferInfo.presentationTimeUs = currentChunkPts
+                              bufferInfo.flags = extractor.sampleFlags
+
+                              muxer.writeSampleData(muxerTrack, buffer, bufferInfo)
+                              extractor.advance()
+                          }
+
+                          try {
+                              muxer.stop()
+                              muxer.release()
+                          } catch (e: Exception) {
+                              e.printStackTrace()
+                          }
+
+                          if (chunkFile.exists() && chunkFile.length() > 500) {
+                              try {
+                                  val englishText = transcribeAudio(chunkFile, groqApiKey)
+                                  if (englishText.isNotBlank()) {
+                                      val hindiText = translateToHindi(englishText, groqApiKey)
+
+                                      runOnUiThread {
+                                          if (chunkIndex == 0) {
+                                              videoView.seekTo(0)
+                                              videoView.start()
+                                              status.text = "Playing Live Hindi Dubbing ✓"
+                                              tts?.speak(hindiText, TextToSpeech.QUEUE_FLUSH, null, "chunk_0")
+                                          } else {
+                                              tts?.speak(hindiText, TextToSpeech.QUEUE_ADD, null, "chunk_$chunkIndex")
+                                          }
+                                      }
+                                  }
+                              } catch (e: Exception) {
+                                  e.printStackTrace()
+                              } finally {
+                                  chunkFile.delete()
+                              }
+                          }
+
+                          chunkIndex++
                       }
 
-                      muxer.stop()
-                      muxer.release()
                       extractor.release()
 
-                      return outputFile
                   } catch (e: Exception) {
-                      e.printStackTrace()
+                      runOnUiThread { status.text = "Error: ${e.localizedMessage}" }
                       extractor.release()
-                      return null
                   }
               }
 
@@ -281,7 +306,6 @@ jobs:
                   conn.doInput = true
 
                   val out = DataOutputStream(conn.outputStream)
-
                   out.writeBytes("--$boundary$CRLF")
                   out.writeBytes("Content-Disposition: form-data; name=\"model\"$CRLF$CRLF")
                   out.writeBytes("whisper-large-v3-turbo$CRLF")
@@ -307,13 +331,11 @@ jobs:
                   out.flush()
                   out.close()
 
-                  val code = conn.responseCode
-                  if (code == 200) {
+                  return if (conn.responseCode == 200) {
                       val res = conn.inputStream.bufferedReader().use { it.readText() }
-                      return JSONObject(res).getString("text")
+                      JSONObject(res).optString("text", "")
                   } else {
-                      val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $code"
-                      throw Exception("Whisper: $err")
+                      ""
                   }
               }
 
@@ -331,7 +353,7 @@ jobs:
                       val messages = JSONArray().apply {
                           put(JSONObject().apply {
                               put("role", "system")
-                              put("content", "You are an expert video dubber. Translate the English transcript into natural, clear spoken Hindi. Output ONLY the Hindi translation in Devanagari script. No other text.")
+                              put("content", "Translate this short spoken English segment to natural Hindi for real-time video dubbing. Output ONLY Hindi translation in Devanagari script.")
                           })
                           put(JSONObject().apply {
                               put("role", "user")
@@ -344,17 +366,16 @@ jobs:
 
                   conn.outputStream.use { it.write(payload.toString().toByteArray()) }
 
-                  val code = conn.responseCode
-                  if (code == 200) {
+                  return if (conn.responseCode == 200) {
                       val res = conn.inputStream.bufferedReader().use { it.readText() }
-                      return JSONObject(res).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content")
+                      JSONObject(res).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content")
                   } else {
-                      val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $code"
-                      throw Exception("Translation: $err")
+                      ""
                   }
               }
 
               override fun onDestroy() {
+                  isProcessing.set(false)
                   tts?.stop()
                   tts?.shutdown()
                   super.onDestroy()
@@ -362,7 +383,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with integrated AI engine"
+          echo "MainActivity updated with live chunk dubber"
 
       - name: Build Debug APK
         run: |
@@ -377,5 +398,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-AI-apk
+          name: HindiDubPlayer-LiveDub-apk
           path: "**/build/outputs/apk/debug/*.apk"

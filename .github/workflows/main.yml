@@ -47,7 +47,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Fixed Clean Engine
+      - name: Replace MainActivity With Overload-Free Engine
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -1697,7 +1697,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully compiled and updated"
+          echo "MainActivity successfully updated and compiled without overloads"
 
       - name: Build Debug APK
         run: |
@@ -1712,5 +1712,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-BuildFix-apk
+          name: HindiDubPlayer-CleanBuild-apk
           path: "**/build/outputs/apk/debug/*.apk"

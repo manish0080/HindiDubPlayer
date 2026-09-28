@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Final Hybrid TranslateTube Engine
+      - name: Replace MainActivity With SpeechProtection Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -136,10 +136,14 @@ jobs:
               private var activeLockedModel: String? = null
               private val candidateModels = mutableListOf<String>()
 
-              // Session-only In-Memory Cache (Wipes automatically on exit)
+              // Session Cache & Timeline Queue
               private val timelineDubQueue = ConcurrentLinkedQueue<TimestampDubSegment>()
               private val sessionCacheMap = ConcurrentHashMap<Long, TimestampDubSegment>()
               private var currentlyPlayingSegment: TimestampDubSegment? = null
+
+              // Pacing & Gap Controllers
+              private var lastSpeechEndTimeMs = 0L
+              private val isSpeechActive = AtomicBoolean(false)
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
@@ -193,10 +197,8 @@ jobs:
                   volumeControlStream = AudioManager.STREAM_MUSIC
                   tts = TextToSpeech(this, this)
 
-                  // Clean old session cache remnants from cacheDir on startup
                   purgeSessionTempFiles()
 
-                  // Persistent SharedPreferences (NEVER wiped by cache cleanup)
                   val prefs = getSharedPreferences("DubSettings", Context.MODE_PRIVATE)
                   targetLangCode = prefs.getString("LANG_CODE", "hi") ?: "hi"
                   targetLangName = prefs.getString("LANG_NAME", "Hindi") ?: "Hindi"
@@ -393,6 +395,7 @@ jobs:
                           if (videoView.isPlaying) {
                               videoView.pause()
                               tts?.stop()
+                              isSpeechActive.set(false)
                               saveCurrentPosition()
                               statusText.text = "Paused at ${formatTime(videoView.currentPosition.toLong())}"
                           } else {
@@ -418,11 +421,10 @@ jobs:
 
                   setContentView(rootLayout)
 
-                  // Start timeline consumer loop (runs every 75ms)
+                  // Start protected timeline consumer loop (polls every 50ms)
                   startTimestampConsumerLoop()
               }
 
-              // Deletes only audio/json cache files, never touches SharedPreferences
               private fun purgeSessionTempFiles() {
                   try {
                       cacheDir.listFiles()?.forEach { file ->
@@ -441,9 +443,10 @@ jobs:
                   timelineDubQueue.clear()
                   currentlyPlayingSegment = null
                   tts?.stop()
+                  isSpeechActive.set(false)
+                  lastSpeechEndTimeMs = 0L
                   subtitleOverlay.text = ""
 
-                  // Instant Cache Lookup: Check if range already exists in session memory
                   val cachedInRange = sessionCacheMap.values
                       .filter { it.startMs in (targetPosMs - 1000L)..(targetPosMs + 20000L) }
                       .sortedBy { it.startMs }
@@ -616,28 +619,28 @@ jobs:
                       } ?: langVoices.firstOrNull { it.name.contains("c-local", true) || it.name.contains("a-local", true) }
 
                       var basePitch = 1.0f
-                      var baseRate = 1.08f
+                      var baseRate = 1.10f
 
                       when (voiceTypeIndex) {
                           0 -> { // Man
                               if (maleVoice != null) tts?.voice = maleVoice
                               basePitch = 0.75f
-                              baseRate = 1.10f
+                              baseRate = 1.12f
                           }
                           1 -> { // Woman
                               if (femaleVoice != null) tts?.voice = femaleVoice
                               basePitch = 1.00f
-                              baseRate = 1.05f
+                              baseRate = 1.08f
                           }
                           2 -> { // Boy
                               if (maleVoice != null) tts?.voice = maleVoice
                               basePitch = 1.18f
-                              baseRate = 1.12f
+                              baseRate = 1.14f
                           }
                           3 -> { // Girl
                               if (femaleVoice != null) tts?.voice = femaleVoice
                               basePitch = 1.38f
-                              baseRate = 1.05f
+                              baseRate = 1.08f
                           }
                       }
 
@@ -645,7 +648,7 @@ jobs:
                       tts?.setSpeechRate(baseRate * currentPlaybackSpeed)
 
                   } catch (e: Exception) {
-                      tts?.setSpeechRate(1.08f * currentPlaybackSpeed)
+                      tts?.setSpeechRate(1.10f * currentPlaybackSpeed)
                   }
               }
 
@@ -655,18 +658,26 @@ jobs:
                       applyVoicePreset()
 
                       tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                          override fun onStart(utteranceId: String?) {}
-                          override fun onDone(utteranceId: String?) {
-                              runOnUiThread {
-                                  currentlyPlayingSegment?.let { seg ->
-                                      if (videoView.currentPosition >= seg.endMs - 500) {
-                                          subtitleOverlay.text = ""
-                                      }
-                                  }
-                              }
+                          override fun onStart(utteranceId: String?) {
+                              isSpeechActive.set(true)
                           }
+
+                          override fun onDone(utteranceId: String?) {
+                              isSpeechActive.set(false)
+                              lastSpeechEndTimeMs = System.currentTimeMillis()
+
+                              // Natural reading pause: Clear subtitle 600ms after speech completely finishes
+                              uiHandler.postDelayed({
+                                  if (!isSpeechActive.get()) {
+                                      subtitleOverlay.text = ""
+                                  }
+                              }, 600)
+                          }
+
                           override fun onError(utteranceId: String?) {
-                              runOnUiThread { subtitleOverlay.text = "" }
+                              isSpeechActive.set(false)
+                              lastSpeechEndTimeMs = System.currentTimeMillis()
+                              uiHandler.post { subtitleOverlay.text = "" }
                           }
                       })
                   }
@@ -679,8 +690,7 @@ jobs:
                       "Voice: ${voiceNames[voiceTypeIndex]}",
                       "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Formal"}",
                       "Speed: ${currentPlaybackSpeed}x",
-                      "Active Cached Dialogues: $activeCount",
-                      "Status: All Temp Cache Auto-Purged on Exit",
+                      "Speech Protection: Enabled (Zero Cut-Off)",
                       "Stop Dubbing"
                   )
                   AlertDialog.Builder(this)
@@ -691,11 +701,11 @@ jobs:
                               1 -> showVoiceSelector()
                               2 -> showStyleSelector()
                               3 -> showSpeedSelector()
-                              4 -> Toast.makeText(this, "$activeCount dialogues in memory", Toast.LENGTH_SHORT).show()
-                              5 -> Toast.makeText(this, "Preferences persist, session cache clears on exit.", Toast.LENGTH_LONG).show()
-                              6 -> {
+                              4 -> Toast.makeText(this, "Speech protection guarantees no sentence is cut short", Toast.LENGTH_LONG).show()
+                              5 -> {
                                   isProcessing.set(false)
                                   tts?.stop()
+                                  isSpeechActive.set(false)
                                   subtitleOverlay.text = ""
                                   timelineDubQueue.clear()
                                   videoView.pause()
@@ -722,6 +732,7 @@ jobs:
 
                       isProcessing.set(false)
                       tts?.stop()
+                      isSpeechActive.set(false)
                       seekTargetMs.set(-1L)
                       timelineDubQueue.clear()
                       sessionCacheMap.clear()
@@ -761,6 +772,7 @@ jobs:
               private fun startDubbingProcess(uri: Uri) {
                   isProcessing.set(true)
                   isSeeking.set(false)
+                  isSpeechActive.set(false)
                   timelineDubQueue.clear()
                   currentlyPlayingSegment = null
                   statusText.text = "Pre-buffering live dialogue session..."
@@ -770,39 +782,47 @@ jobs:
                   }.start()
               }
 
-              // TRANSLATETUBE CONSUMER LOOP (Exact timestamp trigger + auto-clear)
+              // SPEECH-PROTECTED TIMELINE CONSUMER: Guarantees Sentence 1 finishes 100% before Sentence 2 begins!
               private fun startTimestampConsumerLoop() {
                   uiHandler.postDelayed(object : Runnable {
                       override fun run() {
                           if (isProcessing.get() && videoView.isPlaying && !isSeeking.get()) {
                               val curPos = videoView.currentPosition.toLong()
+                              val now = System.currentTimeMillis()
 
-                              // 1. If active dialogue ended, clear subtitle instantly (No stuck text on music!)
-                              currentlyPlayingSegment?.let { current ->
-                                  if (curPos > current.endMs + 300L) {
-                                      subtitleOverlay.text = ""
-                                      currentlyPlayingSegment = null
+                              // Natural breathing gap (scales with playback speed, minimum 250ms)
+                              val naturalGapMs = (350L / currentPlaybackSpeed).toLong().coerceAtLeast(250L)
+
+                              val isBusySpeaking = isSpeechActive.get() || (tts?.isSpeaking == true)
+
+                              // CRITICAL FIX: Only trigger next dialogue if previous speech is 100% finished AND breathing gap has passed!
+                              if (!isBusySpeaking && (now - lastSpeechEndTimeMs >= naturalGapMs)) {
+                                  for (segment in timelineDubQueue) {
+                                      if (!segment.isTriggered && curPos >= segment.startMs - 200L) {
+                                          if (curPos <= segment.endMs + 3000L) {
+                                              segment.isTriggered = true
+                                              currentlyPlayingSegment = segment
+                                              
+                                              // Show subtitle
+                                              subtitleOverlay.text = segment.translatedText
+                                              statusText.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
+                                              
+                                              // Speak without cutting off previous words
+                                              speakDubbed(segment.translatedText)
+                                              break
+                                          } else {
+                                              // Stale segment already passed in video
+                                              segment.isTriggered = true
+                                          }
+                                      }
                                   }
                               }
 
-                              // 2. Trigger dialogue in exact sync
-                              for (segment in timelineDubQueue) {
-                                  if (!segment.isTriggered && curPos >= segment.startMs - 200L && curPos <= segment.endMs) {
-                                      segment.isTriggered = true
-                                      currentlyPlayingSegment = segment
-                                      subtitleOverlay.text = segment.translatedText
-                                      statusText.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
-                                      speakDubbed(segment.translatedText)
-                                      break
-                                  }
-                              }
-
-                              // 3. Remove stale segments that passed 10s ago
                               timelineDubQueue.removeIf { it.isTriggered && curPos > it.endMs + 8000L }
                           }
-                          uiHandler.postDelayed(this, 75)
+                          uiHandler.postDelayed(this, 50) // High accuracy 50ms polling
                       }
-                  }, 75)
+                  }, 50)
               }
 
               private fun populateAccountModels(apiKey: String) {
@@ -944,7 +964,6 @@ jobs:
                   }
               }
 
-              // PRODUCER: Checks session cache first, pre-buffers 15-20s ahead
               private fun runLookAheadProducer(uri: Uri) {
                   val testPfd = contentResolver.openFileDescriptor(uri, "r")
                   val testExtractor = MediaExtractor()
@@ -997,7 +1016,7 @@ jobs:
                           val extractStart = nextProducerPosMs
                           val extractEnd = extractStart + chunkDuration
 
-                          // 1. Session Cache Check (0ms delay)
+                          // 1. Session Cache Check
                           val cachedInWindow = sessionCacheMap.values
                               .filter { it.startMs in (extractStart - 1000L)..extractEnd }
                               .sortedBy { it.startMs }
@@ -1024,7 +1043,7 @@ jobs:
                               continue
                           }
 
-                          // 2. Safe throttle between API calls (Min 3000ms pause)
+                          // 2. Safe throttle between API calls
                           val elapsed = System.currentTimeMillis() - lastGroqCallTime
                           if (elapsed < 3000L) {
                               Thread.sleep(3000L - elapsed)
@@ -1062,7 +1081,6 @@ jobs:
                                           val absEnd = extractStart + seg.endMs
                                           val newSeg = TimestampDubSegment(absStart, absEnd, seg.originalText, translated)
                                           
-                                          // Store in session cache
                                           sessionCacheMap[absStart] = newSeg
                                           timelineDubQueue.add(newSeg)
                                       }
@@ -1340,6 +1358,7 @@ jobs:
                   val params = Bundle().apply {
                       putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
                   }
+                  isSpeechActive.set(true)
                   tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "dub_${System.currentTimeMillis()}")
               }
 
@@ -1348,7 +1367,6 @@ jobs:
                   super.onPause()
               }
 
-              // AUTO PURGE ON APP CLOSE: Deletes temporary cache without touching SharedPreferences
               override fun onDestroy() {
                   saveCurrentPosition()
                   isProcessing.set(false)
@@ -1356,15 +1374,13 @@ jobs:
                   tts?.shutdown()
                   timelineDubQueue.clear()
                   sessionCacheMap.clear()
-                  
                   purgeSessionTempFiles()
-
                   super.onDestroy()
               }
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with TranslateTube Timestamps, Session Cache, and Auto-Purge"
+          echo "MainActivity updated with Speech Protection and Natural Breathing Gap"
 
       - name: Build Debug APK
         run: |
@@ -1379,5 +1395,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-TranslateTubePro-apk
+          name: HindiDubPlayer-ProtectedSync-apk
           path: "**/build/outputs/apk/debug/*.apk"

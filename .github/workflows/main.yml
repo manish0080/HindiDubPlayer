@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Balanced 50Pct Margin Dubber
+      - name: Replace MainActivity With AutoClearing Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -73,6 +73,7 @@ jobs:
           import android.os.Bundle
           import android.os.ParcelFileDescriptor
           import android.speech.tts.TextToSpeech
+          import android.speech.tts.UtteranceProgressListener
           import android.text.TextUtils
           import android.view.Gravity
           import android.view.View
@@ -94,6 +95,7 @@ jobs:
           import java.nio.ByteBuffer
           import java.util.Locale
           import java.util.concurrent.atomic.AtomicBoolean
+          import java.util.concurrent.atomic.AtomicLong
 
           class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
@@ -111,15 +113,15 @@ jobs:
 
               private var selectedVideoUri: Uri? = null
               private var tts: TextToSpeech? = null
-              private var pfd: ParcelFileDescriptor? = null
               private var mediaPlayerRef: MediaPlayer? = null
 
               private val isProcessing = AtomicBoolean(false)
-              private val userSeeked = AtomicBoolean(false)
+              private val seekTargetMs = AtomicLong(-1L)
 
               private var lastErrorDetails = "No errors reported."
               private var activeLockedModel: String? = null
               private val candidateModels = mutableListOf<String>()
+              private var lastSpokenDialogue = ""
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
@@ -207,7 +209,7 @@ jobs:
                   headerLayout.addView(menuBtn)
                   rootLayout.addView(headerLayout)
 
-                  // Controls Row: [Language] [Voice] [Style] [Speed]
+                  // Controls Row
                   val controlsRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       setPadding(0, 4, 0, 4)
@@ -265,7 +267,7 @@ jobs:
                   }
                   rootLayout.addView(statusText)
 
-                  // Persistent Error Banner
+                  // Error Banner
                   errorBox = TextView(this).apply {
                       textSize = 11f
                       setTextColor(Color.WHITE)
@@ -275,7 +277,7 @@ jobs:
                   }
                   rootLayout.addView(errorBox)
 
-                  // Video Frame with 3-Line Subtitle Overlay
+                  // Video Frame
                   val videoContainer = FrameLayout(this).apply {
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
@@ -302,9 +304,9 @@ jobs:
                       mp.setOnSeekCompleteListener {
                           mediaPlayerRef?.setVolume(0f, 0f)
                           applyVideoPlaybackSpeed()
-                          userSeeked.set(true)
-                          tts?.stop()
                           val curPos = videoView.currentPosition.toLong()
+                          seekTargetMs.set(curPos)
+                          tts?.stop()
                           runOnUiThread {
                               statusText.text = "Jumped to ${formatTime(curPos)} (Syncing)..."
                               subtitleOverlay.text = ""
@@ -364,8 +366,9 @@ jobs:
                       text = "⏪ 10s"
                       setOnClickListener {
                           val newPos = (videoView.currentPosition - 10000).coerceAtLeast(0)
-                          userSeeked.set(true)
+                          seekTargetMs.set(newPos.toLong())
                           tts?.stop()
+                          subtitleOverlay.text = ""
                           videoView.seekTo(newPos)
                       }
                   }
@@ -393,8 +396,9 @@ jobs:
                       text = "⏩ 10s"
                       setOnClickListener {
                           val newPos = (videoView.currentPosition + 10000).coerceAtMost(videoView.duration)
-                          userSeeked.set(true)
+                          seekTargetMs.set(newPos.toLong())
                           tts?.stop()
+                          subtitleOverlay.text = ""
                           videoView.seekTo(newPos)
                       }
                   }
@@ -587,6 +591,24 @@ jobs:
                   if (initStatus == TextToSpeech.SUCCESS) {
                       setTtsLocale(targetLangCode)
                       applyVoicePreset()
+
+                      // SUBTITLE AUTO-CLEAR: Exactly when speaking finishes, clear subtitle immediately!
+                      tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                          override fun onStart(utteranceId: String?) {
+                              // Speaking started
+                          }
+                          override fun onDone(utteranceId: String?) {
+                              // Speaking completed! Clear subtitle immediately so it doesn't linger on music/silence!
+                              runOnUiThread {
+                                  subtitleOverlay.text = ""
+                              }
+                          }
+                          override fun onError(utteranceId: String?) {
+                              runOnUiThread {
+                                  subtitleOverlay.text = ""
+                              }
+                          }
+                      })
                   }
               }
 
@@ -640,9 +662,14 @@ jobs:
                       val uri = data?.data ?: return
                       selectedVideoUri = uri
 
+                      try {
+                          contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                      } catch (_: Exception) {}
+
                       isProcessing.set(false)
                       tts?.stop()
-                      userSeeked.set(false)
+                      seekTargetMs.set(-1L)
+                      lastSpokenDialogue = ""
                       errorBox.visibility = View.GONE
                       subtitleOverlay.text = ""
 
@@ -684,6 +711,7 @@ jobs:
               private fun startDubbingProcess(uri: Uri) {
                   isProcessing.set(true)
                   statusText.text = "Starting live dubbing..."
+                  lastSpokenDialogue = ""
 
                   Thread {
                       runDubbingLoop(uri)
@@ -742,112 +770,101 @@ jobs:
                   }
               }
 
+              // FRESH PFD EVERY CHUNK: Completely prevents EOF exhaustion freeze!
               private fun extractAudioSegment(startMs: Long, durationMs: Long, audioFormat: MediaFormat, audioTrackIndex: Int): File? {
-                  val extractor = MediaExtractor()
-                  try {
-                      val descriptor = pfd?.fileDescriptor ?: return null
-                      extractor.setDataSource(descriptor)
-                      extractor.selectTrack(audioTrackIndex)
+                  val uri = selectedVideoUri ?: return null
+                  val pfdItem = contentResolver.openFileDescriptor(uri, "r") ?: return null
 
-                      val startUs = startMs * 1000L
-                      val endUs = (startMs + durationMs) * 1000L
-                      extractor.seekTo(startUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-
-                      val outputFile = File(cacheDir, "temp_chunk.m4a")
-                      if (outputFile.exists()) outputFile.delete()
-
-                      val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-                      val muxerTrack = muxer.addTrack(audioFormat)
-                      muxer.start()
-
-                      val buffer = ByteBuffer.allocate(1024 * 1024)
-                      val bufferInfo = MediaCodec.BufferInfo()
-                      var chunkStartPts = -1L
-                      var lastPts = 0L
-                      var samplesWritten = 0
-
-                      while (isProcessing.get() && !userSeeked.get()) {
-                          buffer.clear()
-                          val sampleSize = extractor.readSampleData(buffer, 0)
-                          if (sampleSize < 0) break
-
-                          val rawPts = extractor.sampleTime
-                          if (chunkStartPts == -1L) chunkStartPts = rawPts
-
-                          var relativePts = rawPts - chunkStartPts
-                          if (relativePts <= lastPts) {
-                              relativePts = lastPts + 20_000L
-                          }
-                          lastPts = relativePts
-
-                          if (rawPts >= endUs) break
-
-                          bufferInfo.offset = 0
-                          bufferInfo.size = sampleSize
-                          bufferInfo.presentationTimeUs = relativePts
-                          bufferInfo.flags = extractor.sampleFlags
-
-                          buffer.position(0)
-                          buffer.limit(sampleSize)
-
-                          muxer.writeSampleData(muxerTrack, buffer, bufferInfo)
-                          samplesWritten++
-                          extractor.advance()
-                      }
-
+                  pfdItem.use { freshDescriptor ->
+                      val extractor = MediaExtractor()
                       try {
-                          if (samplesWritten > 0) muxer.stop()
-                          muxer.release()
+                          extractor.setDataSource(freshDescriptor.fileDescriptor)
+                          extractor.selectTrack(audioTrackIndex)
+
+                          val startUs = startMs * 1000L
+                          val endUs = (startMs + durationMs) * 1000L
+                          extractor.seekTo(startUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+
+                          val outputFile = File(cacheDir, "chunk_${System.currentTimeMillis()}.m4a")
+                          if (outputFile.exists()) outputFile.delete()
+
+                          val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                          val muxerTrack = muxer.addTrack(audioFormat)
+                          muxer.start()
+
+                          val buffer = ByteBuffer.allocate(1024 * 1024)
+                          val bufferInfo = MediaCodec.BufferInfo()
+                          var chunkStartPts = -1L
+                          var lastPts = 0L
+                          var samplesWritten = 0
+
+                          while (isProcessing.get() && seekTargetMs.get() < 0) {
+                              buffer.clear()
+                              val sampleSize = extractor.readSampleData(buffer, 0)
+                              if (sampleSize < 0) break
+
+                              val rawPts = extractor.sampleTime
+                              if (chunkStartPts == -1L) chunkStartPts = rawPts
+
+                              var relativePts = rawPts - chunkStartPts
+                              if (relativePts <= lastPts) {
+                                  relativePts = lastPts + 20_000L
+                              }
+                              lastPts = relativePts
+
+                              if (rawPts >= endUs) break
+
+                              bufferInfo.offset = 0
+                              bufferInfo.size = sampleSize
+                              bufferInfo.presentationTimeUs = relativePts
+                              bufferInfo.flags = extractor.sampleFlags
+
+                              buffer.position(0)
+                              buffer.limit(sampleSize)
+
+                              muxer.writeSampleData(muxerTrack, buffer, bufferInfo)
+                              samplesWritten++
+                              extractor.advance()
+                          }
+
+                          try {
+                              if (samplesWritten > 0) muxer.stop()
+                              muxer.release()
+                          } catch (e: Exception) {
+                              e.printStackTrace()
+                          }
+                          extractor.release()
+
+                          return if (outputFile.exists() && outputFile.length() > 500) outputFile else null
                       } catch (e: Exception) {
-                          e.printStackTrace()
+                          try { extractor.release() } catch (_: Exception) {}
+                          return null
                       }
-                      extractor.release()
-
-                      return if (outputFile.exists() && outputFile.length() > 500) outputFile else null
-                  } catch (e: Exception) {
-                      try { extractor.release() } catch (_: Exception) {}
-                      return null
                   }
               }
 
-              // Calibrated for >50% safety margin (max 8 RPM out of 20 RPM)
-              private fun getChunkDurationForSpeed(speed: Float, isFirst: Boolean): Long {
-                  if (isFirst) return 4_500L
-                  return when {
-                      speed <= 1.05f -> 7_500L   // 1.0x -> 7.5s chunk -> 8.0 RPM (60% Margin)
-                      speed <= 1.30f -> 9_500L   // 1.25x -> 9.5s chunk -> 7.9 RPM (60.5% Margin)
-                      speed <= 1.55f -> 11_500L  // 1.5x -> 11.5s chunk -> 7.9 RPM (60.5% Margin)
-                      speed <= 1.80f -> 13_500L  // 1.75x -> 13.5s chunk -> 7.8 RPM (61% Margin)
-                      else           -> 15_000L  // 2.0x -> 15.0s chunk -> 8.0 RPM (60% Margin)
-                  }
-              }
-
+              // NON-OVERLAPPING DUBBING PIPELINE WITH AUTO-CLEAR
               private fun runDubbingLoop(uri: Uri) {
                   try {
-                      pfd?.close()
-                      pfd = contentResolver.openFileDescriptor(uri, "r")
-                      val descriptor = pfd?.fileDescriptor
-                      if (descriptor == null) {
-                          showError("Cannot access video file")
-                          return
-                      }
-
+                      val testPfd = contentResolver.openFileDescriptor(uri, "r")
                       val testExtractor = MediaExtractor()
-                      testExtractor.setDataSource(descriptor)
 
                       var audioTrackIndex = -1
                       var audioFormat: MediaFormat? = null
 
-                      for (i in 0 until testExtractor.trackCount) {
-                          val format = testExtractor.getTrackFormat(i)
-                          val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
-                          if (mime.startsWith("audio/")) {
-                              audioTrackIndex = i
-                              audioFormat = format
-                              break
+                      testPfd?.use { fd ->
+                          testExtractor.setDataSource(fd.fileDescriptor)
+                          for (i in 0 until testExtractor.trackCount) {
+                              val format = testExtractor.getTrackFormat(i)
+                              val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                              if (mime.startsWith("audio/")) {
+                                  audioTrackIndex = i
+                                  audioFormat = format
+                                  break
+                              }
                           }
+                          testExtractor.release()
                       }
-                      testExtractor.release()
 
                       if (audioTrackIndex < 0 || audioFormat == null) {
                           showError("No audio track found in video!")
@@ -857,6 +874,7 @@ jobs:
                       populateAccountModels(groqApiKey)
 
                       var isFirstChunk = true
+                      var nextExtractPosMs = videoView.currentPosition.toLong()
 
                       while (isProcessing.get()) {
 
@@ -864,33 +882,56 @@ jobs:
                               Thread.sleep(250)
                           }
 
-                          val currentPosMs = videoView.currentPosition.toLong()
-                          userSeeked.set(false)
+                          // If user skipped or cut ahead in video, jump immediately!
+                          val jumpedPos = seekTargetMs.getAndSet(-1L)
+                          if (jumpedPos >= 0) {
+                              nextExtractPosMs = jumpedPos
+                              lastSpokenDialogue = ""
+                              runOnUiThread { subtitleOverlay.text = "" }
+                          }
 
                           mediaPlayerRef?.setVolume(0f, 0f)
 
-                          val chunkDuration = getChunkDurationForSpeed(currentPlaybackSpeed, isFirstChunk)
-                          val chunkFile = extractAudioSegment(currentPosMs, chunkDuration, audioFormat, audioTrackIndex)
+                          val chunkDuration = if (isFirstChunk) {
+                              4_500L
+                          } else {
+                              (7_500L * currentPlaybackSpeed).toLong().coerceIn(7_500L, 15_000L)
+                          }
 
-                          if (userSeeked.get()) {
+                          val extractStart = nextExtractPosMs
+                          val chunkFile = extractAudioSegment(extractStart, chunkDuration, audioFormat, audioTrackIndex)
+
+                          if (seekTargetMs.get() >= 0) {
                               chunkFile?.delete()
                               continue
                           }
+
+                          nextExtractPosMs = extractStart + chunkDuration
 
                           if (chunkFile != null && chunkFile.exists()) {
                               try {
                                   val englishText = transcribeAudioWithRetry(chunkFile, groqApiKey)
                                   chunkFile.delete()
 
-                                  if (userSeeked.get()) continue
+                                  if (seekTargetMs.get() >= 0) continue
 
                                   if (isRealSpeech(englishText)) {
+
+                                      // DEDUPLICATION: Avoid repeating the exact same sentence twice!
+                                      val normalizedEnglish = englishText.trim().lowercase()
+                                      if (normalizedEnglish == lastSpokenDialogue) {
+                                          // Skip re-speaking repeated line
+                                          continue
+                                      }
+
                                       val rawTranslation = translateWithFallback(englishText, targetLangName, dubStyleKey, groqApiKey)
 
-                                      if (userSeeked.get()) continue
+                                      if (seekTargetMs.get() >= 0) continue
 
                                       val cleanedDub = cleanTextForDubbing(rawTranslation, targetLangCode)
                                       if (cleanedDub.isNotBlank()) {
+                                          lastSpokenDialogue = normalizedEnglish
+
                                           runOnUiThread {
                                               subtitleOverlay.text = cleanedDub
                                               statusText.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
@@ -908,8 +949,10 @@ jobs:
                                           }
                                       }
                                   } else {
-                                      if (isFirstChunk) {
-                                          runOnUiThread {
+                                      // Silence / Background music: Clear any lingering subtitle immediately!
+                                      runOnUiThread {
+                                          subtitleOverlay.text = ""
+                                          if (isFirstChunk) {
                                               centerStartBtn.visibility = View.GONE
                                               mediaPlayerRef?.setVolume(0f, 0f)
                                               applyVideoPlaybackSpeed()
@@ -935,12 +978,11 @@ jobs:
                               }
                           }
 
-                          // Wait precisely until near end of current chunk
-                          val realTimeDurationMs = (chunkDuration / currentPlaybackSpeed).toLong()
-                          val nextWaitUntilMs = currentPosMs + (realTimeDurationMs - 1200L).coerceAtLeast(1000L)
-                          while (isProcessing.get() && videoView.isPlaying && videoView.currentPosition < nextWaitUntilMs) {
-                              if (userSeeked.get()) break
-                              Thread.sleep(150)
+                          // 7.0 seconds real wall-clock sleep maintains strictly 8.5 RPM (55% safety margin)
+                          val sleepUntil = System.currentTimeMillis() + 7000L
+                          while (isProcessing.get() && System.currentTimeMillis() < sleepUntil) {
+                              if (seekTargetMs.get() >= 0) break
+                              Thread.sleep(200)
                           }
                       }
 
@@ -952,6 +994,15 @@ jobs:
               private fun isRealSpeech(text: String): Boolean {
                   val trimmed = text.trim()
                   if (trimmed.length < 3) return false
+                  val lower = trimmed.lowercase()
+
+                  // Ignore Whisper noise hallucinations
+                  if (lower.contains("subtitles by") || lower.contains("amara.org") || lower.contains("thank you for watching")) {
+                      return false
+                  }
+                  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return false
+                  if (trimmed.startsWith("(") && trimmed.endsWith(")")) return false
+
                   val words = trimmed.split(" ")
                   if (words.size > 8) {
                       val uniqueWords = words.toSet()
@@ -992,7 +1043,6 @@ jobs:
                   tts?.speak(text, mode, params, "dub_${System.currentTimeMillis()}")
               }
 
-              // Automatic silent backoff on 429 so error screen never triggers
               private fun transcribeAudioWithRetry(audioFile: File, apiKey: String): String {
                   var attempts = 0
                   while (attempts < 3) {
@@ -1159,13 +1209,12 @@ jobs:
                   isProcessing.set(false)
                   tts?.stop()
                   tts?.shutdown()
-                  pfd?.close()
                   super.onDestroy()
               }
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with 50-60% safety margin and responsive chunks"
+          echo "MainActivity updated with clean auto-clearing subtitles and fresh file descriptors"
 
       - name: Build Debug APK
         run: |
@@ -1180,5 +1229,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-FastResponse-apk
+          name: HindiDubPlayer-AutoClear-apk
           path: "**/build/outputs/apk/debug/*.apk"

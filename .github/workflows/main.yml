@@ -871,7 +871,7 @@ EOF
                       val effectiveRole = if (voiceTypeIndex == 0) {
                           speakerType.lowercase()
                       } else {
-                        when (voiceTypeIndex) {
+                          when (voiceTypeIndex) {
                               1 -> "man"
                               2 -> "woman"
                               3 -> "boy"

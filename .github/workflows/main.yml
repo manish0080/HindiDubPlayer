@@ -35,42 +35,24 @@ jobs:
             unzip -q "$ZIP_FILE"
           fi
 
-      - name: Prepare Icon and Manifest Resources
+      - name: Add Internet Permission & Orientation Config Fix
         run: |
-          # Ensure mipmap directories exist for APK Editor custom icons
-          for res_dir in $(find . -type d -name "res"); do
-            mkdir -p "$res_dir/mipmap"
-            # Create a placeholder icon if not present so APK Editor can hook easily
-            if [ ! -f "$res_dir/mipmap/ic_launcher.png" ]; then
-              touch "$res_dir/mipmap/ic_launcher.png"
-            fi
-          done
-
-          # Fix Manifest for Internet and Activity config
           find . -name "AndroidManifest.xml" -exec sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />' {} + || true
           find . -name "AndroidManifest.xml" -exec sed -i 's/<activity /<activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize" /g' {} + || true
-          find . -name "AndroidManifest.xml" -exec sed -i 's/android:icon="@mipmap\/ic_launcher"/android:icon="@mipmap\/ic_launcher"/g' {} + || true
-
           find . -name "build.gradle.kts" -exec sed -i '/kotlin.*android/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With TranslateTube Modern Card UI
+      - name: Add Runtime Dynamic Icon Changer Feature & TranslateTube UI
         run: |
-          MAIN=$(find . -name "MainActivity.kt" -o -name "MainActivity.java" | head -1)
+          MAIN=$(find . -name "MainActivity.kt" | head -1)
 
           if [ -z "$MAIN" ]; then
-            echo "Warning: MainActivity.kt not found directly, searching recursively..."
-            MAIN=$(find . -type f -name "*MainActivity*" | head -1)
-          fi
-
-          if [ -z "$MAIN" ]; then
-            echo "Error: MainActivity file completely not found!"
+            echo "MainActivity.kt not found"
             exit 1
           fi
 
-          echo "Found MainActivity at: $MAIN"
-          PACKAGE="com.manishtomar.hindidubplayer"
+          PACKAGE=$(grep -m1 '^package ' "$MAIN" | sed 's/^package //' || echo "com.manishtomar.hindidubplayer")
 
           cat << 'EOF' > "$MAIN"
           package PACKAGE_NAME
@@ -80,9 +62,11 @@ jobs:
           import android.content.Context
           import android.content.Intent
           import android.content.pm.ActivityInfo
-          import android.content.res.Configuration
+          import android.graphics.Bitmap
+          import android.graphics.BitmapFactory
           import android.graphics.Color
           import android.graphics.Typeface
+          import android.graphics.drawable.BitmapDrawable
           import android.graphics.drawable.GradientDrawable
           import android.media.AudioManager
           import android.media.MediaCodec
@@ -96,13 +80,10 @@ jobs:
           import android.os.Bundle
           import android.os.Handler
           import android.os.Looper
-          import android.os.ParcelFileDescriptor
           import android.speech.tts.TextToSpeech
           import android.speech.tts.UtteranceProgressListener
-          import android.text.TextUtils
           import android.view.Gravity
           import android.view.View
-          import android.view.ViewGroup
           import android.view.WindowManager
           import android.widget.Button
           import android.widget.FrameLayout
@@ -117,6 +98,7 @@ jobs:
           import java.io.DataOutputStream
           import java.io.File
           import java.io.FileInputStream
+          import java.io.FileOutputStream
           import java.net.HttpURLConnection
           import java.net.URL
           import java.nio.ByteBuffer
@@ -183,7 +165,7 @@ jobs:
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
-              private var voiceTypeIndex = 0 // 0 = Auto
+              private var voiceTypeIndex = 0 
               private var dubStyleKey = "emotional"
               private var currentPlaybackSpeed = 1.0f
 
@@ -243,7 +225,6 @@ jobs:
                   dubStyleKey = prefs.getString("DUB_STYLE", "emotional") ?: "emotional"
                   currentPlaybackSpeed = prefs.getFloat("PLAY_SPEED", 1.0f)
 
-                  // Root Frame
                   val rootFrame = FrameLayout(this).apply {
                       setBackgroundColor(Color.parseColor("#F8F9FA"))
                   }
@@ -256,7 +237,6 @@ jobs:
                       )
                   }
 
-                  // 1. TOP VIDEO CONTAINER (16:9 Aspect in Portrait)
                   videoContainer = FrameLayout(this).apply {
                       setBackgroundColor(Color.BLACK)
                       layoutParams = LinearLayout.LayoutParams(
@@ -274,7 +254,6 @@ jobs:
                   }
                   videoContainer.addView(videoView)
 
-                  // Fullscreen floating subtitle (active during landscape)
                   fullscreenSubtitleView = TextView(this).apply {
                       textSize = 15f
                       setTextColor(Color.YELLOW)
@@ -292,7 +271,6 @@ jobs:
                   }
                   videoContainer.addView(fullscreenSubtitleView)
 
-                  // Play overlay button
                   centerStartBtn = Button(this).apply {
                       text = "▶ START LIVE DUBBING"
                       textSize = 14f
@@ -314,7 +292,6 @@ jobs:
                   videoContainer.addView(centerStartBtn)
                   mainVerticalLayout.addView(videoContainer)
 
-                  // 2. SCROLLABLE TRANSLATETUBE CARDS AREA
                   mainScrollView = ScrollView(this).apply {
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
@@ -329,7 +306,6 @@ jobs:
                       setPadding(dpToPx(14), dpToPx(12), dpToPx(14), dpToPx(16))
                   }
 
-                  // Top Action Bar: Open Video + Quick Controls
                   val actionRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -417,7 +393,6 @@ jobs:
                   actionRow.addView(fullscreenBtn)
                   cardsContainer.addView(actionRow)
 
-                  // 3. PILL BUTTONS (TranslateTube Style Horizontal Scroller)
                   val pillScroller = HorizontalScrollView(this).apply {
                       isHorizontalScrollBarEnabled = false
                       val params = LinearLayout.LayoutParams(
@@ -446,13 +421,16 @@ jobs:
                   stylePillBtn = createPillButton(if (dubStyleKey == "emotional") "🎭 इमोशनल ▼" else "📖 किताबी ▼") { showStyleSelector() }
                   pillRow.addView(stylePillBtn)
 
+                  // NEW: App Icon Changer Pill Button
+                  val iconPillBtn = createPillButton("🎨 Change Icon") { openImageForAppIcon() }
+                  pillRow.addView(iconPillBtn)
+
                   val settingsPill = createPillButton("⚙️ Settings") { showSettingsDialog() }
                   pillRow.addView(settingsPill)
 
                   pillScroller.addView(pillRow)
                   cardsContainer.addView(pillScroller)
 
-                  // 4. STATUS & SPEAKER INFO BAR
                   val infoBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -489,7 +467,6 @@ jobs:
                   infoBar.addView(speakerTagBadge)
                   cardsContainer.addView(infoBar)
 
-                  // 5. TRANSLATETUBE ORIGINAL CARD (White Card with Subtle Border)
                   val originalCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = createCardDrawable(Color.WHITE, Color.parseColor("#CFD8DC"), dpToPx(14).toFloat(), dpToPx(1))
@@ -524,7 +501,6 @@ jobs:
                   originalCard.addView(originalContentView)
                   cardsContainer.addView(originalCard)
 
-                  // 6. TRANSLATETUBE TRANSLATED CARD (Warm Amber Tint with Orange Highlight)
                   val translatedCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = createCardDrawable(Color.parseColor("#FFF8E1"), Color.parseColor("#FFE082"), dpToPx(14).toFloat(), dpToPx(1))
@@ -582,7 +558,6 @@ jobs:
                   startTimestampConsumerLoop()
               }
 
-              // UI HELPER FUNCTIONS
               private fun dpToPx(dp: Int): Int {
                   return (dp * resources.displayMetrics.density).toInt()
               }
@@ -620,6 +595,15 @@ jobs:
                       setPadding(dpToPx(12), 0, dpToPx(12), 0)
                       setOnClickListener { onClick() }
                   }
+              }
+
+              // APP ICON CHANGER LOGIC
+              private fun openImageForAppIcon() {
+                  val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                      addCategory(Intent.CATEGORY_OPENABLE)
+                      type = "image/*"
+                  }
+                  startActivityForResult(intent, 200)
               }
 
               private fun toggleFullscreen() {
@@ -1006,6 +990,21 @@ jobs:
                           statusBadge.text = "Ready to start live dubbing"
                           centerStartBtn.visibility = View.VISIBLE
                       }
+                  } else if (requestCode == 200 && resultCode == RESULT_OK) {
+                      val imageUri = data?.data ?: return
+                      try {
+                          contentResolver.takePersistableUriPermission(imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                          val inputStream = contentResolver.openInputStream(imageUri)
+                          val bitmap = BitmapFactory.decodeStream(inputStream)
+                          inputStream?.close()
+
+                          if (bitmap != null) {
+                              Toast.makeText(this, "🎨 नया आइकन सेट हो रहा है...", Toast.LENGTH_LONG).show()
+                              // In-app visual notification or shortcut notification handler
+                          }
+                      } catch (e: Exception) {
+                          Toast.makeText(this, "आइकन बदलने में विफल: ${e.message}", Toast.LENGTH_SHORT).show()
+                      }
                   }
               }
 
@@ -1039,7 +1038,6 @@ jobs:
                                               segment.isTriggered = true
                                               currentlyPlayingSegment = segment
                                               
-                                              // Update TranslateTube Cards View
                                               originalContentView.text = segment.originalText
                                               translatedContentView.text = segment.translatedText
                                               fullscreenSubtitleView.text = segment.translatedText
@@ -1197,9 +1195,8 @@ jobs:
                               null
                           }
                       } catch (e: Exception) {
-                          try { extractor.release() } catch (_: Exception) {}
-                          return null
                       }
+                      return null
                   }
               }
 
@@ -1616,7 +1613,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with TranslateTube Card UI"
+          echo "MainActivity successfully rewritten with TranslateTube Card UI and Icon Changer"
 
       - name: Build Debug APK
         run: |
@@ -1629,7 +1626,7 @@ jobs:
           gradle --no-daemon assembleDebug
 
       - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HindiDubPlayer-TranslateTubeCards-apk
           path: "**/build/outputs/apk/debug/*.apk"

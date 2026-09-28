@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Flawless Dubber
+      - name: Replace MainActivity With Full Sync Speed Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -67,7 +67,9 @@ jobs:
           import android.media.MediaFormat
           import android.media.MediaMuxer
           import android.media.MediaPlayer
+          import android.media.PlaybackParams
           import android.net.Uri
+          import android.os.Build
           import android.os.Bundle
           import android.os.ParcelFileDescriptor
           import android.speech.tts.TextToSpeech
@@ -105,6 +107,7 @@ jobs:
               private lateinit var langBtn: Button
               private lateinit var voiceBtn: Button
               private lateinit var styleBtn: Button
+              private lateinit var speedBtn: Button
 
               private var selectedVideoUri: Uri? = null
               private var tts: TextToSpeech? = null
@@ -122,6 +125,7 @@ jobs:
               private var targetLangName = "Hindi"
               private var voiceTypeIndex = 0
               private var dubStyleKey = "emotional"
+              private var currentPlaybackSpeed = 1.0f
 
               private val availableLanguages = arrayOf(
                   "Hindi (हिन्दी)" to ("hi" to "Hindi"),
@@ -152,6 +156,14 @@ jobs:
                   "📖 किताबी (Formal Textbook)"
               )
 
+              private val speedOptions = arrayOf(
+                  "1.0x (Normal)" to 1.0f,
+                  "1.25x (Fast)" to 1.25f,
+                  "1.5x (Super Fast)" to 1.5f,
+                  "1.75x" to 1.75f,
+                  "2.0x (Double Speed)" to 2.0f
+              )
+
               private val groqApiKey = "gsk_BNe4A96j6NLA" + "dcvlcAkAWGdyb3FY" + "itxb1szvztxpo3hH" + "1bQydBza"
 
               override fun onCreate(savedInstanceState: Bundle?) {
@@ -166,13 +178,14 @@ jobs:
                   targetLangName = prefs.getString("LANG_NAME", "Hindi") ?: "Hindi"
                   voiceTypeIndex = prefs.getInt("VOICE_INDEX", 0)
                   dubStyleKey = prefs.getString("DUB_STYLE", "emotional") ?: "emotional"
+                  currentPlaybackSpeed = prefs.getFloat("PLAY_SPEED", 1.0f)
 
                   val rootLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setPadding(12, 12, 12, 12)
                   }
 
-                  // Header Layout
+                  // Top Header
                   val headerLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -194,7 +207,7 @@ jobs:
                   headerLayout.addView(menuBtn)
                   rootLayout.addView(headerLayout)
 
-                  // Controls Row: [Language] [Voice] [Style]
+                  // Controls Row: [Language] [Voice] [Style] [Speed]
                   val controlsRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       setPadding(0, 4, 0, 4)
@@ -202,27 +215,35 @@ jobs:
 
                   langBtn = Button(this).apply {
                       text = "🌐 $targetLangName ▼"
-                      textSize = 11f
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f)
+                      textSize = 10f
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.1f)
                       setOnClickListener { showLanguageSelector() }
                   }
                   controlsRow.addView(langBtn)
 
                   voiceBtn = Button(this).apply {
                       text = voiceNames[voiceTypeIndex].split(" ")[1] + " ▼"
-                      textSize = 11f
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      textSize = 10f
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f)
                       setOnClickListener { showVoiceSelector() }
                   }
                   controlsRow.addView(voiceBtn)
 
                   styleBtn = Button(this).apply {
                       text = if (dubStyleKey == "emotional") "🎭 इमोशनल ▼" else "📖 किताबी ▼"
-                      textSize = 11f
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.1f)
+                      textSize = 10f
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
                       setOnClickListener { showStyleSelector() }
                   }
                   controlsRow.addView(styleBtn)
+
+                  speedBtn = Button(this).apply {
+                      text = "⚡ ${currentPlaybackSpeed}x ▼"
+                      textSize = 10f
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f)
+                      setOnClickListener { showSpeedSelector() }
+                  }
+                  controlsRow.addView(speedBtn)
                   rootLayout.addView(controlsRow)
 
                   // Open Video Button
@@ -233,7 +254,7 @@ jobs:
                   }
                   rootLayout.addView(selectBtn)
 
-                  // Compact 1-Line Status
+                  // 1-Line Status
                   statusText = TextView(this).apply {
                       text = "Open a video to start"
                       textSize = 12f
@@ -254,7 +275,7 @@ jobs:
                   }
                   rootLayout.addView(errorBox)
 
-                  // Video Frame with Clean Subtitle Overlay
+                  // Video Frame with 3-Line Subtitle Overlay
                   val videoContainer = FrameLayout(this).apply {
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
@@ -275,9 +296,12 @@ jobs:
 
                   videoView.setOnPreparedListener { mp ->
                       mediaPlayerRef = mp
-                      mp.setVolume(0f, 0f) // Permanently mute original video sound
+                      mp.setVolume(0f, 0f) // Keep original sound 100% muted
+                      applyVideoPlaybackSpeed()
+
                       mp.setOnSeekCompleteListener {
                           mediaPlayerRef?.setVolume(0f, 0f)
+                          applyVideoPlaybackSpeed()
                           userSeeked.set(true)
                           tts?.stop()
                           val curPos = videoView.currentPosition.toLong()
@@ -288,14 +312,14 @@ jobs:
                       }
                   }
 
-                  // 2-Line Subtitle Bar Overlay at Bottom
+                  // 3-Line Subtitle Bar Overlay at Bottom
                   subtitleOverlay = TextView(this).apply {
                       text = ""
                       textSize = 14f
                       setTextColor(Color.YELLOW)
-                      setBackgroundColor(Color.parseColor("#99000000")) // Semi-transparent black
+                      setBackgroundColor(Color.parseColor("#99000000"))
                       gravity = Gravity.CENTER
-                      maxLines = 2
+                      maxLines = 3 // Upgraded to 3 lines
                       ellipsize = TextUtils.TruncateAt.END
                       setPadding(16, 8, 16, 8)
                       layoutParams = FrameLayout.LayoutParams(
@@ -357,8 +381,9 @@ jobs:
                               statusText.text = "Paused at ${formatTime(videoView.currentPosition.toLong())}"
                           } else {
                               mediaPlayerRef?.setVolume(0f, 0f)
+                              applyVideoPlaybackSpeed()
                               videoView.start()
-                              statusText.text = "Playing with Live Dubbing"
+                              statusText.text = "Playing with Live Dubbing (${currentPlaybackSpeed}x)"
                           }
                       }
                   }
@@ -403,6 +428,40 @@ jobs:
                           .putInt("POS_" + uri.toString().hashCode(), pos)
                           .apply()
                   }
+              }
+
+              private fun applyVideoPlaybackSpeed() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                      try {
+                          mediaPlayerRef?.let { mp ->
+                              val params = mp.playbackParams ?: PlaybackParams()
+                              params.speed = currentPlaybackSpeed
+                              mp.playbackParams = params
+                          }
+                      } catch (e: Exception) {
+                          e.printStackTrace()
+                      }
+                  }
+              }
+
+              private fun showSpeedSelector() {
+                  val labels = speedOptions.map { it.first }.toTypedArray()
+                  AlertDialog.Builder(this)
+                      .setTitle("Choose Playback Speed (गति)")
+                      .setItems(labels) { _, idx ->
+                          currentPlaybackSpeed = speedOptions[idx].second
+                          speedBtn.text = "⚡ ${currentPlaybackSpeed}x ▼"
+
+                          getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
+                              .putFloat("PLAY_SPEED", currentPlaybackSpeed)
+                              .apply()
+
+                          applyVideoPlaybackSpeed()
+                          applyVoicePreset() // Sync TTS rate directly with video speed!
+                          Toast.makeText(this, "Speed set to ${currentPlaybackSpeed}x", Toast.LENGTH_SHORT).show()
+                      }
+                      .setNegativeButton("Cancel", null)
+                      .show()
               }
 
               private fun showLanguageSelector() {
@@ -490,30 +549,38 @@ jobs:
                           it.name.contains("woman", true)
                       } ?: langVoices.firstOrNull { it.name.contains("c-local", true) || it.name.contains("a-local", true) }
 
+                      var basePitch = 1.0f
+                      var baseRate = 1.05f
+
                       when (voiceTypeIndex) {
                           0 -> { // Man
                               if (maleVoice != null) tts?.voice = maleVoice
-                              tts?.setPitch(0.75f)
-                              tts?.setSpeechRate(1.10f)
+                              basePitch = 0.75f
+                              baseRate = 1.08f
                           }
                           1 -> { // Woman
                               if (femaleVoice != null) tts?.voice = femaleVoice
-                              tts?.setPitch(1.00f)
-                              tts?.setSpeechRate(1.10f)
+                              basePitch = 1.00f
+                              baseRate = 1.05f
                           }
                           2 -> { // Boy
                               if (maleVoice != null) tts?.voice = maleVoice
-                              tts?.setPitch(1.18f)
-                              tts?.setSpeechRate(1.12f)
+                              basePitch = 1.18f
+                              baseRate = 1.10f
                           }
                           3 -> { // Girl
                               if (femaleVoice != null) tts?.voice = femaleVoice
-                              tts?.setPitch(1.38f)
-                              tts?.setSpeechRate(1.10f)
+                              basePitch = 1.38f
+                              baseRate = 1.05f
                           }
                       }
+
+                      tts?.setPitch(basePitch)
+                      // Perfectly scaled voice rate with video speed!
+                      tts?.setSpeechRate(baseRate * currentPlaybackSpeed)
+
                   } catch (e: Exception) {
-                      tts?.setSpeechRate(1.10f)
+                      tts?.setSpeechRate(1.05f * currentPlaybackSpeed)
                   }
               }
 
@@ -530,6 +597,7 @@ jobs:
                       "Target: $targetLangName ($targetLangCode)",
                       "Voice: ${voiceNames[voiceTypeIndex]}",
                       "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Formal"}",
+                      "Speed: ${currentPlaybackSpeed}x",
                       "Active Model: $activeM",
                       "View Last Error Details",
                       "Stop Dubbing"
@@ -541,15 +609,16 @@ jobs:
                               0 -> showLanguageSelector()
                               1 -> showVoiceSelector()
                               2 -> showStyleSelector()
-                              3 -> Toast.makeText(this, "Model: $activeM", Toast.LENGTH_SHORT).show()
-                              4 -> {
+                              3 -> showSpeedSelector()
+                              4 -> Toast.makeText(this, "Model: $activeM", Toast.LENGTH_SHORT).show()
+                              5 -> {
                                   AlertDialog.Builder(this)
                                       .setTitle("Last Error Info")
                                       .setMessage(lastErrorDetails)
                                       .setPositiveButton("OK", null)
                                       .show()
                               }
-                              5 -> {
+                              6 -> {
                                   isProcessing.set(false)
                                   tts?.stop()
                                   videoView.pause()
@@ -622,7 +691,6 @@ jobs:
                   }.start()
               }
 
-              // Discovers active models from Groq account
               private fun populateAccountModels(apiKey: String) {
                   if (candidateModels.isNotEmpty()) return
 
@@ -645,7 +713,6 @@ jobs:
                                   val id = item.optString("id", "").trim()
                                   val isActive = item.optBoolean("active", true)
 
-                                  // Only real chat models (no audio, vision, embeddings, or guards)
                                   if (isActive && id.isNotBlank() &&
                                       !id.contains("whisper", true) &&
                                       !id.contains("guard", true) &&
@@ -664,7 +731,6 @@ jobs:
                       e.printStackTrace()
                   }
 
-                  // Priority sorting: put fast official production models first
                   candidateModels.sortByDescending {
                       when {
                           it.contains("gpt-oss-20b", true) -> 100
@@ -677,7 +743,6 @@ jobs:
                   }
               }
 
-              // Extract exactly a small audio chunk from the CURRENT video position
               private fun extractAudioSegment(startMs: Long, durationMs: Long, audioFormat: MediaFormat, audioTrackIndex: Int): File? {
                   val extractor = MediaExtractor()
                   try {
@@ -746,7 +811,6 @@ jobs:
                   }
               }
 
-              // STATLESS DUBBING LOOP: Follows current video position cleanly
               private fun runDubbingLoop(uri: Uri) {
                   try {
                       pfd?.close()
@@ -785,7 +849,6 @@ jobs:
 
                       while (isProcessing.get()) {
 
-                          // Wait if user paused video
                           while (isProcessing.get() && !videoView.isPlaying && !isFirstChunk) {
                               Thread.sleep(250)
                           }
@@ -793,10 +856,9 @@ jobs:
                           val currentPosMs = videoView.currentPosition.toLong()
                           userSeeked.set(false)
 
-                          // Keep video muted 100%
                           mediaPlayerRef?.setVolume(0f, 0f)
 
-                          val chunkDuration = if (isFirstChunk) 6_000L else 9_000L
+                          val chunkDuration = if (isFirstChunk) 5_000L else 9_000L
                           val chunkFile = extractAudioSegment(currentPosMs, chunkDuration, audioFormat, audioTrackIndex)
 
                           if (userSeeked.get()) {
@@ -806,13 +868,11 @@ jobs:
 
                           if (chunkFile != null && chunkFile.exists()) {
                               try {
-                                  // Transcribe ONLY English, prevent Urdu/Arabic hallucinations!
                                   val englishText = transcribeEnglishAudio(chunkFile, groqApiKey)
                                   chunkFile.delete()
 
                                   if (userSeeked.get()) continue
 
-                                  // Only process if actual dialogue is detected
                                   if (isRealSpeech(englishText)) {
                                       val rawTranslation = translateWithFallback(englishText, targetLangName, dubStyleKey, groqApiKey)
 
@@ -822,11 +882,12 @@ jobs:
                                       if (cleanedDub.isNotBlank()) {
                                           runOnUiThread {
                                               subtitleOverlay.text = cleanedDub
-                                              statusText.text = "Dubbing Active ($targetLangName) [${activeLockedModel ?: "AI"}]"
+                                              statusText.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
 
                                               if (isFirstChunk) {
                                                   centerStartBtn.visibility = View.GONE
                                                   mediaPlayerRef?.setVolume(0f, 0f)
+                                                  applyVideoPlaybackSpeed()
                                                   videoView.start()
                                                   speakDubbed(cleanedDub, true)
                                                   isFirstChunk = false
@@ -836,13 +897,13 @@ jobs:
                                           }
                                       }
                                   } else {
-                                      // Silence / Background music segment
                                       if (isFirstChunk) {
                                           runOnUiThread {
                                               centerStartBtn.visibility = View.GONE
                                               mediaPlayerRef?.setVolume(0f, 0f)
+                                              applyVideoPlaybackSpeed()
                                               videoView.start()
-                                              statusText.text = "Playing (Waiting for dialogue...)"
+                                              statusText.text = "Playing (${currentPlaybackSpeed}x)"
                                               isFirstChunk = false
                                           }
                                       }
@@ -856,14 +917,15 @@ jobs:
                               if (isFirstChunk) {
                                   runOnUiThread {
                                       centerStartBtn.visibility = View.GONE
+                                      applyVideoPlaybackSpeed()
                                       videoView.start()
                                       isFirstChunk = false
                                   }
                               }
                           }
 
-                          // Sleep ~8 seconds while video plays the current chunk timeline
-                          val nextWaitUntilMs = currentPosMs + 8_000L
+                          val effectiveWait = (8_000L / currentPlaybackSpeed).toLong()
+                          val nextWaitUntilMs = currentPosMs + effectiveWait
                           while (isProcessing.get() && videoView.isPlaying && videoView.currentPosition < nextWaitUntilMs) {
                               if (userSeeked.get()) break
                               Thread.sleep(200)
@@ -875,35 +937,25 @@ jobs:
                   }
               }
 
-              // Checks if recognized text is actual dialogue, not background noise loop
               private fun isRealSpeech(text: String): Boolean {
                   val trimmed = text.trim()
                   if (trimmed.length < 3) return false
-                  // Detect repeating hallucinations (e.g. "thank you" repeated 5 times)
                   val words = trimmed.split(" ")
                   if (words.size > 8) {
                       val uniqueWords = words.toSet()
-                      if (uniqueWords.size < words.size / 3) return false // High repetition ratio
+                      if (uniqueWords.size < words.size / 3) return false
                   }
                   return true
               }
 
-              // Cleans text so TTS NEVER speaks English or Urdu
+              // Cleans text without mid-sentence word chops
               private fun cleanTextForDubbing(text: String, langCode: String): String {
                   var res = text.trim()
-                  // Remove markdown and quotes
                   res = res.replace(Regex("[*\"#_]"), "")
                   
-                  // If target is Hindi, remove any stray Latin/English words and Urdu/Arabic letters
                   if (langCode == "hi") {
-                      res = res.replace(Regex("[a-zA-Z]"), "") // Remove English words
-                      res = res.replace(Regex("[\u0600-\u06FF]"), "") // Remove Arabic/Urdu script
-                  }
-                  
-                  // Cap to 25 words max so TTS never gets bogged down
-                  val words = res.split(" ")
-                  if (words.size > 25) {
-                      res = words.take(25).joinToString(" ")
+                      res = res.replace(Regex("[a-zA-Z]"), "")
+                      res = res.replace(Regex("[\u0600-\u06FF]"), "")
                   }
                   return res.trim()
               }
@@ -929,7 +981,6 @@ jobs:
                   tts?.speak(text, mode, params, "dub_${System.currentTimeMillis()}")
               }
 
-              // Whisper strictly forced to English to eliminate foreign hallucinations!
               private fun transcribeEnglishAudio(audioFile: File, apiKey: String): String {
                   val boundary = "Boundary" + System.currentTimeMillis()
                   val lineEnd = "\r\n"
@@ -948,17 +999,14 @@ jobs:
 
                   val out = DataOutputStream(conn.outputStream)
 
-                  // Model
                   out.writeBytes(twoHyphens + boundary + lineEnd)
                   out.writeBytes("Content-Disposition: form-data; name=\"model\"" + lineEnd + lineEnd)
                   out.writeBytes("whisper-large-v3-turbo" + lineEnd)
 
-                  // Force English Language to prevent Urdu/Arabic hallucination!
                   out.writeBytes(twoHyphens + boundary + lineEnd)
                   out.writeBytes("Content-Disposition: form-data; name=\"language\"" + lineEnd + lineEnd)
                   out.writeBytes("en" + lineEnd)
 
-                  // Temperature 0.0 to prevent random creative text on silence
                   out.writeBytes(twoHyphens + boundary + lineEnd)
                   out.writeBytes("Content-Disposition: form-data; name=\"temperature\"" + lineEnd + lineEnd)
                   out.writeBytes("0.0" + lineEnd)
@@ -994,7 +1042,6 @@ jobs:
                   }
               }
 
-              // Resilient fallback translation that tries verified models
               private fun translateWithFallback(text: String, targetLang: String, style: String, apiKey: String): String {
                   activeLockedModel?.let { model ->
                       try {
@@ -1038,9 +1085,9 @@ jobs:
                   }
 
                   val systemPrompt = if (style == "emotional") {
-                      "You are a professional anime and comic voice dubber. Translate the spoken English into natural, emotional spoken $targetLang in native script. Never output English words or explanations. Output ONLY the translated dialogue."
+                      "You are an expert anime & video dubber. Translate the spoken English into natural, flowing spoken $targetLang in native script. Complete every sentence cleanly with full punctuation. Output ONLY the translated sentence. Never cut off words."
                   } else {
-                      "Translate the spoken English into formal $targetLang in native script. Never output English words or explanations. Output ONLY the translation."
+                      "Translate spoken English into formal $targetLang in native script. Complete every sentence cleanly. Output ONLY the translation."
                   }
 
                   val payload = JSONObject().apply {
@@ -1056,8 +1103,8 @@ jobs:
                           })
                       }
                       put("messages", messages)
-                      put("max_tokens", 60) // Prevent huge runaway loops
-                      put("temperature", 0.1) // Low temperature stops hallucination
+                      put("max_tokens", 250) // Plenty of room for full Hindi sentences
+                      put("temperature", 0.1)
                   }
 
                   conn.outputStream.use { it.write(payload.toString().toByteArray()) }
@@ -1088,7 +1135,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity completely rebuilt with stateless seeking & hallucination filters"
+          echo "MainActivity updated with 3-line subtitles, 2x playback speed and complete sentence tokens"
 
       - name: Build Debug APK
         run: |
@@ -1103,5 +1150,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-Flawless-apk
+          name: HindiDubPlayer-SpeedAndFix-apk
           path: "**/build/outputs/apk/debug/*.apk"

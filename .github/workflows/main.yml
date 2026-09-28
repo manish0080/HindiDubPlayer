@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Bulletproof Dubber
+      - name: Replace MainActivity With Self-Healing Multi-Model Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -113,6 +113,8 @@ jobs:
 
               private var lastErrorDetails = "No errors reported."
               private var processedSegments = 0
+              private var lockedWorkingModel: String? = null
+              private val availableCandidateModels = mutableListOf<String>()
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
@@ -168,7 +170,7 @@ jobs:
                       setPadding(14, 14, 14, 14)
                   }
 
-                  // Top Header
+                  // Header Layout
                   val headerLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -238,7 +240,7 @@ jobs:
                   }
                   rootLayout.addView(statusText)
 
-                  // Persistent Error Banner
+                  // Error Banner
                   errorBox = TextView(this).apply {
                       textSize = 12f
                       setTextColor(Color.WHITE)
@@ -294,7 +296,7 @@ jobs:
                       setOnClickListener {
                           val uri = selectedVideoUri ?: return@setOnClickListener
                           isEnabled = false
-                          text = "⏳ Preparing Dubbing (3 sec)..."
+                          text = "⏳ Starting dubbing (2-3 sec)..."
                           errorBox.visibility = View.GONE
                           startDubbingProcess(uri)
                       }
@@ -493,10 +495,12 @@ jobs:
               }
 
               private fun showSettingsDialog() {
+                  val activeM = lockedWorkingModel ?: "Auto-detecting..."
                   val options = arrayOf(
                       "Target: $targetLangName ($targetLangCode)",
                       "Voice: ${voiceNames[voiceTypeIndex]}",
                       "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Formal"}",
+                      "Active Model: $activeM",
                       "View Last Error Details",
                       "Stop Dubbing"
                   )
@@ -507,14 +511,15 @@ jobs:
                               0 -> showLanguageSelector()
                               1 -> showVoiceSelector()
                               2 -> showStyleSelector()
-                              3 -> {
+                              3 -> Toast.makeText(this, "Model: $activeM", Toast.LENGTH_SHORT).show()
+                              4 -> {
                                   AlertDialog.Builder(this)
                                       .setTitle("Last Error Info")
                                       .setMessage(lastErrorDetails)
                                       .setPositiveButton("OK", null)
                                       .show()
                               }
-                              4 -> {
+                              5 -> {
                                   isProcessing.set(false)
                                   tts?.stop()
                                   videoView.pause()
@@ -580,11 +585,54 @@ jobs:
               private fun startDubbingProcess(uri: Uri) {
                   isProcessing.set(true)
                   processedSegments = 0
-                  statusText.text = "Extracting first audio segment..."
+                  statusText.text = "Starting live audio dubbing..."
 
                   Thread {
                       startLiveStreamingPipeline(uri)
                   }.start()
+              }
+
+              // Queries account's available models once
+              private fun populateAccountModels(apiKey: String) {
+                  if (availableCandidateModels.isNotEmpty()) return
+
+                  try {
+                      val url = URL("https://api.groq.com/openai/v1/models")
+                      val conn = (url.openConnection() as HttpURLConnection).apply {
+                          requestMethod = "GET"
+                          setRequestProperty("Authorization", "Bearer $apiKey")
+                          connectTimeout = 6000
+                          readTimeout = 6000
+                          doInput = true
+                      }
+
+                      if (conn.responseCode == 200) {
+                          val res = conn.inputStream.bufferedReader().use { it.readText() }
+                          val data = JSONObject(res).optJSONArray("data")
+                          if (data != null && data.length() > 0) {
+                              for (i in 0 until data.length()) {
+                                  val item = data.getJSONObject(i)
+                                  val id = item.optString("id", "").trim()
+                                  val isActive = item.optBoolean("active", true)
+
+                                  // Filter out audio, guards, vision, embeddings, decommissioned and third-party models
+                                  if (isActive && id.isNotBlank() &&
+                                      !id.contains("/") &&
+                                      !id.contains("whisper", true) &&
+                                      !id.contains("guard", true) &&
+                                      !id.contains("vision", true) &&
+                                      !id.contains("embed", true) &&
+                                      !id.contains("orpheus", true) &&
+                                      !id.contains("tts", true) &&
+                                      id != "llama3-8b-8192") {
+                                      availableCandidateModels.add(id)
+                                  }
+                              }
+                          }
+                      }
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                  }
               }
 
               private fun startLiveStreamingPipeline(uri: Uri) {
@@ -621,6 +669,9 @@ jobs:
 
                       extractor.selectTrack(audioTrackIndex)
 
+                      // Fetch account models in background once
+                      populateAccountModels(groqApiKey)
+
                       var chunkIndex = 0
                       var hasMoreAudio = true
                       val buffer = ByteBuffer.allocate(1024 * 1024)
@@ -628,8 +679,8 @@ jobs:
 
                       while (hasMoreAudio && isProcessing.get()) {
 
-                          // Chunk 0 is 6s (super fast start). Chunks after that are 15s (Strictly under 4 RPM!)
-                          val chunkDurationUs = if (chunkIndex == 0) 6_000_000L else 15_000_000L
+                          // Chunk 0 is 5s (instant start). Subsequent chunks are 15s (Strictly under 4 RPM safe)
+                          val chunkDurationUs = if (chunkIndex == 0) 5_000_000L else 15_000_000L
 
                           // Jump support
                           val targetSeek = seekTargetUs.getAndSet(-1L)
@@ -643,13 +694,13 @@ jobs:
                                   Thread.sleep(250)
                               }
 
-                              val expectedChunkTimeMs = (if (chunkIndex == 1) 6000L else 6000L + (chunkIndex - 1) * 15000L)
+                              val expectedChunkTimeMs = (if (chunkIndex == 1) 5000L else 5000L + (chunkIndex - 1) * 15000L)
                               while (isProcessing.get() && videoView.isPlaying && seekTargetUs.get() < 0) {
                                   val currentPosMs = videoView.currentPosition
-                                  if (currentPosMs >= expectedChunkTimeMs - 3000L) {
+                                  if (currentPosMs >= expectedChunkTimeMs - 2500L) {
                                       break
                                   }
-                                  Thread.sleep(350)
+                                  Thread.sleep(300)
                               }
                           }
 
@@ -716,7 +767,7 @@ jobs:
                           if (chunkFile.exists() && chunkFile.length() > 500) {
                               try {
                                   runOnUiThread {
-                                      statusText.text = if (chunkIndex == 0) "Starting AI Engine..." else "Listening (Part $currentChunkNum)..."
+                                      statusText.text = if (chunkIndex == 0) "Transcribing dialogue..." else "Listening (Part $currentChunkNum)..."
                                   }
 
                                   val recognizedText = transcribeAudioWithRetry(chunkFile, groqApiKey)
@@ -726,7 +777,7 @@ jobs:
                                           statusText.text = "Translating ($targetLangName)..."
                                       }
 
-                                      val dubbedText = translateWithFallback(recognizedText, targetLangName, dubStyleKey, groqApiKey)
+                                      val dubbedText = translateWithResilientFallback(recognizedText, targetLangName, dubStyleKey, groqApiKey)
 
                                       runOnUiThread {
                                           processedSegments++
@@ -736,10 +787,10 @@ jobs:
                                               centerStartBtn.visibility = View.GONE
                                               videoView.seekTo(0)
                                               videoView.start()
-                                              statusText.text = "Playing ($targetLangName) ✓\n\n$dubbedText"
+                                              statusText.text = "Dubbing Active ✓ ($lockedWorkingModel)\n\n$dubbedText"
                                               speakDubbed(dubbedText, true)
                                           } else {
-                                              statusText.text = "Playing (Part $currentChunkNum) ✓\n\n$dubbedText"
+                                              statusText.text = "Part $currentChunkNum ($targetLangName) ✓\n\n$dubbedText"
                                               speakDubbed(dubbedText, false)
                                           }
                                       }
@@ -866,17 +917,60 @@ jobs:
                   }
               }
 
-              // Direct Fallback translation: Tries llama-3.3-70b-versatile, if fails immediately tries llama-3.1-8b-instant
-              private fun translateWithFallback(text: String, targetLang: String, style: String, apiKey: String): String {
-                  return try {
-                      translateToLang(text, targetLang, style, "llama-3.3-70b-versatile", apiKey)
-                  } catch (e1: Exception) {
+              // RESILIENT SELF-HEALING FALLBACK: Tries locked model first, otherwise iterates candidate models
+              private fun translateWithResilientFallback(text: String, targetLang: String, style: String, apiKey: String): String {
+                  // If we already verified a working model, use it!
+                  lockedWorkingModel?.let { model ->
                       try {
-                          translateToLang(text, targetLang, style, "llama-3.1-8b-instant", apiKey)
-                      } catch (e2: Exception) {
-                          translateToLang(text, targetLang, style, "mixtral-8x7b-32768", apiKey)
+                          return translateToLang(text, targetLang, style, model, apiKey)
+                      } catch (e: Exception) {
+                          // If current locked model had transient rate limit, retry once
+                          if (e.localizedMessage?.contains("429") == true) {
+                              Thread.sleep(3000)
+                              return translateToLang(text, targetLang, style, model, apiKey)
+                          }
+                          // Otherwise unlock and find another candidate
+                          lockedWorkingModel = null
                       }
                   }
+
+                  // Build priority list of models to try
+                  val candidatesToTry = mutableListOf<String>()
+                  if (availableCandidateModels.isNotEmpty()) {
+                      candidatesToTry.addAll(availableCandidateModels)
+                  }
+                  // Standard emergency fallback IDs
+                  listOf("mixtral-8x7b-32768", "gemma2-9b-it", "llama-3.2-3b-preview", "llama-3.2-1b-preview", "qwen-2.5-32b").forEach {
+                      if (!candidatesToTry.contains(it)) candidatesToTry.add(it)
+                  }
+
+                  var lastErr = ""
+                  for (cand in candidatesToTry) {
+                      try {
+                          val result = translateToLang(text, targetLang, style, cand, apiKey)
+                          if (result.isNotBlank()) {
+                              lockedWorkingModel = cand // LOCK WORKING MODEL PERMANENTLY!
+                              return result
+                          }
+                      } catch (e: Exception) {
+                          lastErr = e.localizedMessage ?: "Unknown error"
+                          if (lastErr.contains("429") || lastErr.contains("rate_limit", true)) {
+                              Thread.sleep(3000)
+                              try {
+                                  val retryRes = translateToLang(text, targetLang, style, cand, apiKey)
+                                  if (retryRes.isNotBlank()) {
+                                      lockedWorkingModel = cand
+                                      return retryRes
+                                  }
+                              } catch (re: Exception) {
+                                  lastErr = re.localizedMessage ?: ""
+                              }
+                          }
+                          // Model not found or terms required on this candidate: quietly continue to next candidate!
+                      }
+                  }
+
+                  throw Exception("All models failed. Last error: $lastErr")
               }
 
               private fun translateToLang(sourceText: String, targetLang: String, style: String, modelName: String, apiKey: String): String {
@@ -885,8 +979,8 @@ jobs:
                       requestMethod = "POST"
                       setRequestProperty("Authorization", "Bearer $apiKey")
                       setRequestProperty("Content-Type", "application/json")
-                      connectTimeout = 12000
-                      readTimeout = 20000
+                      connectTimeout = 10000
+                      readTimeout = 18000
                       doOutput = true
                       doInput = true
                   }
@@ -941,7 +1035,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with bulletproof architecture"
+          echo "MainActivity updated with Self-Healing Multi-Model Engine"
 
       - name: Build Debug APK
         run: |
@@ -956,5 +1050,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-Bulletproof-apk
+          name: HindiDubPlayer-SelfHealing-apk
           path: "**/build/outputs/apk/debug/*.apk"

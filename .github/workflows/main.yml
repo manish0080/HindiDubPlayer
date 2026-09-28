@@ -35,7 +35,7 @@ jobs:
             unzip -q "$ZIP_FILE"
           fi
 
-      - name: Add Internet, Share Intent & Config Changes in AndroidManifest
+      - name: Add Internet, ClearText & Share Intent in AndroidManifest
         run: |
           find . -name "AndroidManifest.xml" -exec sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />' {} + || true
           find . -name "AndroidManifest.xml" -exec sed -i 's/<application /<application android:usesCleartextTraffic="true" /g' {} + || true
@@ -47,7 +47,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Fixed YouTube Embedder
+      - name: Replace MainActivity With Muted YouTube MultiCharacter Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -124,7 +124,7 @@ jobs:
               val endMs: Long,
               val originalText: String,
               val translatedText: String,
-              val speakerType: String = "man",
+              val speakerType: String = "man", // "man", "woman", "boy", "girl"
               var isTriggered: Boolean = false
           )
 
@@ -156,7 +156,9 @@ jobs:
               private var selectedVideoUri: Uri? = null
               private var currentYoutubeVideoId: String? = null
               private var isYoutubeMode = false
-              private var lastYoutubeTimeSec = 0f
+              private val currentYoutubeTimeMs = AtomicLong(0L)
+              private val isYoutubePlaying = AtomicBoolean(false)
+              private var lastYoutubeSeekCheckSec = 0.0
 
               private var tts: TextToSpeech? = null
               private var mediaPlayerRef: MediaPlayer? = null
@@ -181,7 +183,7 @@ jobs:
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
-              private var voiceTypeIndex = 0 // 0 = Auto Character
+              private var voiceTypeIndex = 0 // 0 = 🎭 Auto (Character-Based)
               private var dubStyleKey = "emotional"
               private var currentPlaybackSpeed = 1.0f
 
@@ -272,7 +274,6 @@ jobs:
                   }
                   videoContainer.addView(videoView)
 
-                  // Setup WebView with Chrome User-Agent to bypass Error 152-4
                   webViewPlayer = WebView(this).apply {
                       layoutParams = FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
@@ -288,8 +289,7 @@ jobs:
                           useWideViewPort = true
                           loadWithOverviewMode = true
                           mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                          // CRITICAL FIX FOR ERROR 152-4: Disguise WebView as pure Chrome Mobile Browser!
-                          userAgentString = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+                          userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
                       }
 
                       webChromeClient = WebChromeClient()
@@ -629,27 +629,35 @@ jobs:
                   }
               }
 
+              // JAVASCRIPT BRIDGE WITH ERROR PREVENTION
               inner class YouTubeBridge {
                   @JavascriptInterface
-                  fun onTimeUpdate(timeSec: Float, state: Int) {
-                      val timeMs = (timeSec * 1000).toLong()
-                      if (Math.abs(timeSec - lastYoutubeTimeSec) > 2.0f) {
+                  fun onTimeUpdate(timeSec: Double) {
+                      val timeMs = (timeSec * 1000.0).toLong()
+                      if (Math.abs(timeSec - lastYoutubeSeekCheckSec) > 2.0) {
                           handleSeekTo(timeMs)
                       }
-                      lastYoutubeTimeSec = timeSec
+                      lastYoutubeSeekCheckSec = timeSec
+                      currentYoutubeTimeMs.set(timeMs)
                   }
 
                   @JavascriptInterface
                   fun onStateChange(state: Int) {
                       runOnUiThread {
                           when (state) {
-                              1 -> statusBadge.text = "YouTube Playing (Dubbing Active)"
+                              1 -> {
+                                  isYoutubePlaying.set(true)
+                                  statusBadge.text = "▶ YouTube Playing (Dubbing Active)"
+                                  // Ensure YouTube remains 100% strictly MUTED at all times!
+                                  webViewPlayer.evaluateJavascript("if(player && player.mute){ player.mute(); player.setVolume(0); }", null)
+                              }
                               2 -> {
-                                  statusBadge.text = "YouTube Paused"
+                                  isYoutubePlaying.set(false)
+                                  statusBadge.text = "⏸ YouTube Paused"
                                   tts?.stop()
                                   isSpeechActive.set(false)
                               }
-                              3 -> statusBadge.text = "Buffering YouTube..."
+                              3 -> statusBadge.text = "⏳ Buffering YouTube..."
                           }
                       }
                   }
@@ -662,7 +670,7 @@ jobs:
                   }
                   AlertDialog.Builder(this)
                       .setTitle("🔗 YouTube Live Dubbing")
-                      .setMessage("Paste any YouTube Video or Shorts URL to live dub like TranslateTube:")
+                      .setMessage("Paste any YouTube Video or Shorts URL to live dub with dynamic character voices:")
                       .setView(input)
                       .setPositiveButton("Dub Now") { _, _ ->
                           val text = input.text.toString().trim()
@@ -696,12 +704,14 @@ jobs:
                   currentlyPlayingSegment = null
                   tts?.stop()
                   isSpeechActive.set(false)
+                  currentYoutubeTimeMs.set(0L)
+                  lastYoutubeSeekCheckSec = 0.0
 
                   statusBadge.text = "Connecting to YouTube stream..."
                   originalContentView.text = "Loading captions..."
-                  translatedContentView.text = "Preparing dubbing stream..."
+                  translatedContentView.text = "Preparing dynamic character dubbing..."
 
-                  // BROWSER-COMPATIBLE EMBED WITH STRICT-ORIGIN POLICY
+                  // YOUTUBE STRICTLY 0% VOLUME (100% MUTED FOREVER)
                   val html = """
                       <!DOCTYPE html>
                       <html>
@@ -732,16 +742,29 @@ jobs:
                             player = new YT.Player('player', {
                               events: {
                                 'onReady': function(e) {
-                                  e.target.mute();
-                                  e.target.playVideo();
+                                  try {
+                                    // STRICTLY 0% VOLUME: TranslateTube behavior
+                                    e.target.mute();
+                                    e.target.setVolume(0);
+                                    e.target.playVideo();
+                                  } catch(err) {}
                                   setInterval(function() {
-                                    if (player && player.getCurrentTime) {
-                                      AndroidBridge.onTimeUpdate(player.getCurrentTime(), player.getPlayerState());
-                                    }
-                                  }, 60);
+                                    try {
+                                      if (player && typeof player.getCurrentTime === 'function') {
+                                        var t = player.getCurrentTime();
+                                        if (typeof t === 'number' && !isNaN(t)) {
+                                          AndroidBridge.onTimeUpdate(t);
+                                        }
+                                      }
+                                    } catch(err) {}
+                                  }, 80);
                                 },
                                 'onStateChange': function(e) {
-                                  AndroidBridge.onStateChange(e.data);
+                                  try {
+                                    if (typeof e.data === 'number') {
+                                      AndroidBridge.onStateChange(e.data);
+                                    }
+                                  } catch(err) {}
                                 }
                               }
                             });
@@ -755,7 +778,7 @@ jobs:
 
                   isProcessing.set(true)
                   Thread {
-                      runYouTubeInnerTubeCaptionPipeline(videoId)
+                      runMultiLayerYouTubeCaptionPipeline(videoId)
                   }.start()
               }
 
@@ -782,18 +805,24 @@ jobs:
                   }
               }
 
-              // OFFICIAL INNERTUBE ANDROID API: 100% Reliable, Zero Block, No JSON Exception!
-              private fun runYouTubeInnerTubeCaptionPipeline(videoId: String) {
+              // MULTI-LAYER CAPTION PIPELINE
+              private fun runMultiLayerYouTubeCaptionPipeline(videoId: String) {
                   populateAccountModels(groqApiKey)
 
+                  var rawCaptionTrackUrl: String? = null
+
+                  // Strategy 1: Desktop WEB client InnerTube
                   try {
                       val url = URL("https://www.youtube.com/youtubei/v1/player")
                       val conn = (url.openConnection() as HttpURLConnection).apply {
                           requestMethod = "POST"
                           setRequestProperty("Content-Type", "application/json")
-                          setRequestProperty("User-Agent", "com.google.android.youtube/19.26.35 (Linux; U; Android 14)")
-                          connectTimeout = 12000
-                          readTimeout = 15000
+                          setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+                          setRequestProperty("X-YouTube-Client-Name", "1")
+                          setRequestProperty("X-YouTube-Client-Version", "2.20240901.00.00")
+                          setRequestProperty("Referer", "https://www.youtube.com/watch?v=$videoId")
+                          connectTimeout = 10000
+                          readTimeout = 12000
                           doOutput = true
                           doInput = true
                       }
@@ -801,8 +830,8 @@ jobs:
                       val payload = JSONObject().apply {
                           val context = JSONObject().apply {
                               val client = JSONObject().apply {
-                                  put("clientName", "ANDROID")
-                                  put("clientVersion", "19.26.35")
+                                  put("clientName", "WEB")
+                                  put("clientVersion", "2.20240901.00.00")
                                   put("hl", "en")
                                   put("gl", "US")
                               }
@@ -814,123 +843,157 @@ jobs:
 
                       conn.outputStream.use { it.write(payload.toString().toByteArray()) }
 
-                      if (conn.responseCode != 200) {
-                          runOnUiThread {
-                              statusBadge.text = "⚠️ Unable to load YouTube player stream (HTTP ${conn.responseCode})"
-                          }
-                          return
-                      }
+                      if (conn.responseCode == 200) {
+                          val res = conn.inputStream.bufferedReader().use { it.readText() }
+                          val root = JSONObject(res)
+                          val tracks = root.optJSONObject("captions")
+                              ?.optJSONObject("playerCaptionsTracklistRenderer")
+                              ?.optJSONArray("captionTracks")
 
-                      val res = conn.inputStream.bufferedReader().use { it.readText() }
-                      if (res.isBlank()) {
-                          runOnUiThread { statusBadge.text = "⚠️ Empty response from YouTube" }
-                          return
-                      }
-
-                      val root = JSONObject(res)
-                      val captionTracks = root.optJSONObject("captions")
-                          ?.optJSONObject("playerCaptionsTracklistRenderer")
-                          ?.optJSONArray("captionTracks")
-
-                      if (captionTracks == null || captionTracks.length() == 0) {
-                          runOnUiThread {
-                              statusBadge.text = "⚠️ No captions on this YouTube video. Use '📁 Local' for Whisper AI!"
-                              originalContentView.text = "This video has no subtitles available."
-                              translatedContentView.text = "Dubbing unavailable without captions."
-                          }
-                          return
-                      }
-
-                      // Pick English or first available track
-                      var chosenUrl = ""
-                      for (i in 0 until captionTracks.length()) {
-                          val tr = captionTracks.getJSONObject(i)
-                          val lang = tr.optString("languageCode", "")
-                          if (lang.startsWith("en")) {
-                              chosenUrl = tr.optString("baseUrl", "")
-                              break
+                          if (tracks != null && tracks.length() > 0) {
+                              for (i in 0 until tracks.length()) {
+                                  val tr = tracks.getJSONObject(i)
+                                  val lang = tr.optString("languageCode", "")
+                                  if (lang.startsWith("en")) {
+                                      rawCaptionTrackUrl = tr.optString("baseUrl", "")
+                                      break
+                                  }
+                              }
+                              if (rawCaptionTrackUrl.isNullOrEmpty()) {
+                                  rawCaptionTrackUrl = tracks.getJSONObject(0).optString("baseUrl", "")
+                              }
                           }
                       }
-                      if (chosenUrl.isBlank()) {
-                          chosenUrl = captionTracks.getJSONObject(0).optString("baseUrl", "")
-                      }
+                  } catch (_: Exception) {}
 
-                      if (chosenUrl.isBlank()) {
-                          runOnUiThread { statusBadge.text = "⚠️ Caption URL not found" }
-                          return
-                      }
+                  // Strategy 2: Web Scraping ytInitialPlayerResponse
+                  if (rawCaptionTrackUrl.isNullOrEmpty()) {
+                      try {
+                          val webConn = (URL("https://www.youtube.com/watch?v=$videoId").openConnection() as HttpURLConnection).apply {
+                              setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                              setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+                              connectTimeout = 10000
+                              readTimeout = 12000
+                          }
+                          val pageHtml = webConn.inputStream.bufferedReader().use { it.readText() }
+                          val p = Pattern.compile("\"captionTracks\":\\s*(\\[.*?\\])")
+                          val m = p.matcher(pageHtml)
+                          if (m.find()) {
+                              val arr = JSONArray(m.group(1))
+                              if (arr.length() > 0) {
+                                  rawCaptionTrackUrl = arr.getJSONObject(0).optString("baseUrl", "")
+                              }
+                          }
+                      } catch (_: Exception) {}
+                  }
 
-                      val timedTextUrl = if (chosenUrl.contains("fmt=json3")) chosenUrl else "$chosenUrl&fmt=json3"
-                      val capConn = (URL(timedTextUrl).openConnection() as HttpURLConnection).apply {
-                          setRequestProperty("User-Agent", "com.google.android.youtube/19.26.35")
+                  // Strategy 3: Direct timedtext fallback
+                  if (rawCaptionTrackUrl.isNullOrEmpty()) {
+                      rawCaptionTrackUrl = "https://www.youtube.com/api/timedtext?v=$videoId&lang=en"
+                  }
+
+                  val allSentences = mutableListOf<TimestampDubSegment>()
+                  try {
+                      val finalUrl = if (rawCaptionTrackUrl.contains("fmt=")) rawCaptionTrackUrl else "$rawCaptionTrackUrl&fmt=json3"
+                      val capConn = (URL(finalUrl).openConnection() as HttpURLConnection).apply {
+                          setRequestProperty("User-Agent", "Mozilla/5.0")
                           connectTimeout = 10000
                           readTimeout = 12000
                       }
 
-                      val capText = capConn.inputStream.bufferedReader().use { it.readText() }
-                      if (capText.isBlank() || !capText.trim().startsWith("{")) {
-                          runOnUiThread { statusBadge.text = "⚠️ Timed subtitles format error" }
-                          return
-                      }
+                      val capText = capConn.inputStream.bufferedReader().use { it.readText() }.trim()
 
-                      val capJson = JSONObject(capText)
-                      val events = capJson.optJSONArray("events") ?: return
+                      if (capText.startsWith("{")) {
+                          val capJson = JSONObject(capText)
+                          val events = capJson.optJSONArray("events")
+                          if (events != null) {
+                              for (i in 0 until events.length()) {
+                                  val ev = events.getJSONObject(i)
+                                  val startMs = ev.optLong("tStartMs", -1L)
+                                  val durationMs = ev.optLong("dDurationMs", 0L)
+                                  val segs = ev.optJSONArray("segs")
 
-                      val allSentences = mutableListOf<TimestampDubSegment>()
-                      for (i in 0 until events.length()) {
-                          val ev = events.getJSONObject(i)
-                          val startMs = ev.optLong("tStartMs", -1L)
-                          val durationMs = ev.optLong("dDurationMs", 0L)
-                          val segs = ev.optJSONArray("segs")
-
-                          if (startMs >= 0 && segs != null) {
-                              val sb = StringBuilder()
-                              for (j in 0 until segs.length()) {
-                                  sb.append(segs.getJSONObject(j).optString("utf8", ""))
+                                  if (startMs >= 0 && segs != null) {
+                                      val sb = StringBuilder()
+                                      for (j in 0 until segs.length()) {
+                                          sb.append(segs.getJSONObject(j).optString("utf8", ""))
+                                      }
+                                      val text = cleanHtmlEntities(sb.toString())
+                                      if (isRealSpeech(text)) {
+                                          allSentences.add(TimestampDubSegment(startMs, startMs + durationMs, text, ""))
+                                      }
+                                  }
                               }
-                              val text = sb.toString().replace("\n", " ").trim()
-                              if (isRealSpeech(text)) {
-                                  allSentences.add(TimestampDubSegment(startMs, startMs + durationMs, text, ""))
+                          }
+                      } else if (capText.startsWith("<")) {
+                          val xmlPattern = Pattern.compile("<text start=\"([0-9.]+)\" dur=\"([0-9.]+)\"[^>]*>(.*?)</text>")
+                          val xmlMatcher = xmlPattern.matcher(capText)
+                          while (xmlMatcher.find()) {
+                              val startSec = xmlMatcher.group(1)?.toDoubleOrNull() ?: 0.0
+                              val durSec = xmlMatcher.group(2)?.toDoubleOrNull() ?: 1.0
+                              val rawText = cleanHtmlEntities(xmlMatcher.group(3) ?: "")
+
+                              if (isRealSpeech(rawText)) {
+                                  val startMs = (startSec * 1000.0).toLong()
+                                  val endMs = startMs + (durSec * 1000.0).toLong()
+                                  allSentences.add(TimestampDubSegment(startMs, endMs, rawText, ""))
                               }
                           }
                       }
+                  } catch (_: Exception) {}
 
+                  if (allSentences.isEmpty()) {
                       runOnUiThread {
-                          statusBadge.text = "Captions Loaded (${allSentences.size} lines). Dubbing active!"
+                          statusBadge.text = "⚠️ No captions found. Open in '📁 Local' to dub with Whisper AI!"
+                          originalContentView.text = "This video has no subtitles."
+                          translatedContentView.text = "Please download or use a video with subtitles."
                       }
-
-                      var currentIndex = 0
-                      while (isProcessing.get() && currentIndex < allSentences.size) {
-                          val batch = mutableListOf<TimestampDubSegment>()
-                          while (batch.size < 5 && currentIndex < allSentences.size) {
-                              batch.add(allSentences[currentIndex])
-                              currentIndex++
-                          }
-
-                          val texts = batch.map { it.originalText }
-                          val translatedObjs = batchTranslateDialogues(texts, targetLangName, dubStyleKey, groqApiKey)
-
-                          for (k in batch.indices) {
-                              val seg = batch[k]
-                              val transObj = if (k < translatedObjs.size) translatedObjs[k] else ("" to "man")
-                              val cleaned = cleanTextForDubbing(transObj.first, targetLangCode)
-                              val speaker = transObj.second
-
-                              if (cleaned.isNotBlank()) {
-                                  val newSeg = TimestampDubSegment(seg.startMs, seg.endMs, seg.originalText, cleaned, speaker)
-                                  sessionCacheMap[seg.startMs] = newSeg
-                                  timelineDubQueue.add(newSeg)
-                              }
-                          }
-
-                          Thread.sleep(1200)
-                      }
-
-                  } catch (e: Exception) {
-                      runOnUiThread {
-                          statusBadge.text = "Error: ${e.localizedMessage}"
-                      }
+                      return
                   }
+
+                  runOnUiThread {
+                      statusBadge.text = "Captions Loaded (${allSentences.size} lines). Character Dubbing Active!"
+                  }
+
+                  var currentIndex = 0
+                  while (isProcessing.get() && currentIndex < allSentences.size) {
+                      val batch = mutableListOf<TimestampDubSegment>()
+                      while (batch.size < 5 && currentIndex < allSentences.size) {
+                          batch.add(allSentences[currentIndex])
+                          currentIndex++
+                      }
+
+                      val texts = batch.map { it.originalText }
+                      val translatedObjs = batchTranslateDialogues(texts, targetLangName, dubStyleKey, groqApiKey)
+
+                      for (k in batch.indices) {
+                          val seg = batch[k]
+                          val transObj = if (k < translatedObjs.size) translatedObjs[k] else ("" to "man")
+                          val cleaned = cleanTextForDubbing(transObj.first, targetLangCode)
+                          val speaker = transObj.second
+
+                          if (cleaned.isNotBlank()) {
+                              val newSeg = TimestampDubSegment(seg.startMs, seg.endMs, seg.originalText, cleaned, speaker)
+                              sessionCacheMap[seg.startMs] = newSeg
+                              timelineDubQueue.add(newSeg)
+                          }
+                      }
+
+                      Thread.sleep(1000)
+                  }
+              }
+
+              private fun cleanHtmlEntities(text: String): String {
+                  return text.replace("&amp;#39;", "'")
+                      .replace("&#39;", "'")
+                      .replace("&amp;quot;", "\"")
+                      .replace("&quot;", "\"")
+                      .replace("&amp;amp;", "&")
+                      .replace("&amp;", "&")
+                      .replace("&lt;", "<")
+                      .replace("&gt;", ">")
+                      .replace("\n", " ")
+                      .trim()
               }
 
               private fun dpToPx(dp: Int): Int {
@@ -1185,6 +1248,7 @@ jobs:
                   }
               }
 
+              // EXACT DYNAMIC CHARACTER VOICE ENGINE: Boy to Boy, Girl to Girl, Man to Man, Woman to Woman!
               private fun applyCharacterVoice(speakerType: String) {
                   try {
                       val voices = tts?.voices ?: emptySet()
@@ -1205,7 +1269,7 @@ jobs:
                       } ?: langVoices.firstOrNull { it.name.contains("c-local", true) || it.name.contains("a-local", true) }
 
                       val effectiveRole = if (voiceTypeIndex == 0) {
-                          speakerType.lowercase()
+                          speakerType.lowercase() // 🎭 Dynamic Auto Character Selection
                       } else {
                           when (voiceTypeIndex) {
                               1 -> "man"
@@ -1220,24 +1284,24 @@ jobs:
                       var baseRate = 1.06f
 
                       when (effectiveRole) {
-                          "woman" -> {
-                              if (femaleVoice != null) tts?.voice = femaleVoice
-                              basePitch = 1.05f
-                              baseRate = 1.06f
-                          }
-                          "girl" -> {
-                              if (femaleVoice != null) tts?.voice = femaleVoice
-                              basePitch = 1.38f
-                              baseRate = 1.05f
-                          }
-                          "boy" -> {
+                          "boy" -> { // 👦 Boy (Chhota Ladka / Child Boy)
                               if (maleVoice != null) tts?.voice = maleVoice
-                              basePitch = 1.25f
+                              basePitch = 1.28f // Youthful child pitch
                               baseRate = 1.08f
                           }
-                          else -> {
+                          "girl" -> { // 👧 Girl (Chhoti Ladki / Child Girl)
+                              if (femaleVoice != null) tts?.voice = femaleVoice
+                              basePitch = 1.42f // Cute high child pitch
+                              baseRate = 1.05f
+                          }
+                          "woman" -> { // 👩 Woman (Adult Female)
+                              if (femaleVoice != null) tts?.voice = femaleVoice
+                              basePitch = 1.05f // Natural female tone
+                              baseRate = 1.06f
+                          }
+                          else -> { // 👨 Man (Adult Male)
                               if (maleVoice != null) tts?.voice = maleVoice
-                              basePitch = 0.75f
+                              basePitch = 0.78f // Deep masculine tone
                               baseRate = 1.08f
                           }
                       }
@@ -1305,7 +1369,7 @@ jobs:
                                   isSpeechActive.set(false)
                                   fullscreenSubtitleView.text = ""
                                   timelineDubQueue.clear()
-                                  if (!isYoutubeMode) videoView.pause()
+                                  if (!isYoutubeMode) videoView.pause() else webViewPlayer.evaluateJavascript("if(player) player.pauseVideo();", null)
                                   saveCurrentPosition()
                                   statusBadge.text = "Dubbing Stopped"
                                   centerStartBtn.visibility = View.VISIBLE
@@ -1381,8 +1445,8 @@ jobs:
               private fun startTimestampConsumerLoop() {
                   uiHandler.postDelayed(object : Runnable {
                       override fun run() {
-                          val curPos = if (isYoutubeMode) (lastYoutubeTimeSec * 1000).toLong() else videoView.currentPosition.toLong()
-                          val isPlaying = if (isYoutubeMode) true else videoView.isPlaying
+                          val curPos = if (isYoutubeMode) currentYoutubeTimeMs.get() else videoView.currentPosition.toLong()
+                          val isPlaying = if (isYoutubeMode) isYoutubePlaying.get() else videoView.isPlaying
 
                           if (isProcessing.get() && isPlaying && !isSeeking.get()) {
                               val now = System.currentTimeMillis()
@@ -1788,17 +1852,14 @@ jobs:
                   return segmentsList
               }
 
+              // MULTI-CHARACTER BATCH TRANSLATION ENGINE (Detects boy, girl, man, woman)
               private fun batchTranslateDialogues(texts: List<String>, targetLang: String, style: String, apiKey: String): List<Pair<String, String>> {
                   if (texts.isEmpty()) return emptyList()
 
                   val jsonInput = JSONArray()
                   texts.forEach { jsonInput.put(it) }
 
-                  val prompt = if (style == "emotional") {
-                      "You are a master anime and movie dubber. Translate this JSON array of dialogue strings into expressive spoken $targetLang in native script. Also analyze the dialogue and speaker role/gender to classify the speaker into: 'man', 'woman', 'boy', or 'girl'. Output ONLY a valid JSON array of objects: [{\"text\": \"अनुवाद\", \"speaker\": \"woman\"}]. No notes or explanations."
-                  } else {
-                      "Translate this JSON array of dialogue strings into formal $targetLang in native script. Classify each speaker into: 'man', 'woman', 'boy', or 'girl'. Output ONLY a valid JSON array of objects: [{\"text\": \"अनुवाद\", \"speaker\": \"man\"}]."
-                  }
+                  val prompt = "You are a professional movie & anime dubber. Translate this JSON array of dialogue strings into expressive spoken $targetLang in native script. Also determine the speaker category strictly as one of: 'boy' (young male kid), 'girl' (young female kid), 'woman' (adult female), or 'man' (adult male). Output ONLY a valid JSON array of objects like [{\"text\": \"अनुवाद\", \"speaker\": \"woman\"}]. No extra text."
 
                   val model = activeLockedModel ?: "llama-3.1-8b-instant"
 
@@ -1857,62 +1918,7 @@ jobs:
                       }
                   } catch (_: Exception) {}
 
-                  return texts.map { translateSingleDialogueWithSpeaker(it, targetLang, style, apiKey) }
-              }
-
-              private fun translateSingleDialogueWithSpeaker(sourceText: String, targetLang: String, style: String, apiKey: String): Pair<String, String> {
-                  val modelsToTry = mutableListOf<String>()
-                  activeLockedModel?.let { modelsToTry.add(it) }
-                  modelsToTry.addAll(candidateModels)
-                  listOf("openai/gpt-oss-20b", "openai/gpt-oss-120b", "llama-3.1-8b-instant", "mixtral-8x7b-32768").forEach {
-                      if (!modelsToTry.contains(it)) modelsToTry.add(it)
-                  }
-
-                  val systemPrompt = "Translate spoken dialogue into $targetLang and detect speaker role: 'man', 'woman', 'boy', or 'girl'. Output ONLY JSON: {\"text\": \"...\", \"speaker\": \"...\"}"
-
-                  for (model in modelsToTry) {
-                      try {
-                          val url = URL("https://api.groq.com/openai/v1/chat/completions")
-                          val conn = (url.openConnection() as HttpURLConnection).apply {
-                              requestMethod = "POST"
-                              setRequestProperty("Authorization", "Bearer $apiKey")
-                              setRequestProperty("Content-Type", "application/json")
-                              connectTimeout = 8000
-                              readTimeout = 15000
-                              doOutput = true
-                              doInput = true
-                          }
-
-                          val payload = JSONObject().apply {
-                              put("model", model)
-                              val messages = JSONArray().apply {
-                                  put(JSONObject().apply {
-                                      put("role", "system")
-                                      put("content", systemPrompt)
-                                  })
-                                  put(JSONObject().apply {
-                                      put("role", "user")
-                                      put("content", sourceText)
-                                  })
-                              }
-                              put("messages", messages)
-                              put("max_tokens", 250)
-                              put("temperature", 0.1)
-                          }
-
-                          conn.outputStream.use { it.write(payload.toString().toByteArray()) }
-
-                          if (conn.responseCode == 200) {
-                              val res = conn.inputStream.bufferedReader().use { it.readText() }
-                              val output = JSONObject(res).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
-                              val clean = if (output.contains("{")) output.substring(output.indexOf("{"), output.lastIndexOf("}") + 1) else output
-                              val obj = JSONObject(clean)
-                              activeLockedModel = model
-                              return obj.optString("text", output) to obj.optString("speaker", "man").lowercase()
-                          }
-                      } catch (_: Exception) {}
-                  }
-                  return sourceText to "man"
+                  return texts.map { it to "man" }
               }
 
               private fun isRealSpeech(text: String): Boolean {
@@ -1972,7 +1978,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully updated with fixed YouTube player embed and InnerTube API"
+          echo "MainActivity updated with strictly 0% YouTube audio and character-accurate TTS"
 
       - name: Build Debug APK
         run: |
@@ -1987,5 +1993,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-FixYouTubeError152-apk
+          name: HindiDubPlayer-MutedYouTubeMultiChar-apk
           path: "**/build/outputs/apk/debug/*.apk"

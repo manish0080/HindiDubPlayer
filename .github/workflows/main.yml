@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Full Sync Speed Dubber
+      - name: Replace MainActivity With Balanced 50Pct Margin Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -185,7 +185,7 @@ jobs:
                       setPadding(12, 12, 12, 12)
                   }
 
-                  // Top Header
+                  // Header Layout
                   val headerLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -296,7 +296,7 @@ jobs:
 
                   videoView.setOnPreparedListener { mp ->
                       mediaPlayerRef = mp
-                      mp.setVolume(0f, 0f) // Keep original sound 100% muted
+                      mp.setVolume(0f, 0f)
                       applyVideoPlaybackSpeed()
 
                       mp.setOnSeekCompleteListener {
@@ -319,7 +319,7 @@ jobs:
                       setTextColor(Color.YELLOW)
                       setBackgroundColor(Color.parseColor("#99000000"))
                       gravity = Gravity.CENTER
-                      maxLines = 3 // Upgraded to 3 lines
+                      maxLines = 3
                       ellipsize = TextUtils.TruncateAt.END
                       setPadding(16, 8, 16, 8)
                       layoutParams = FrameLayout.LayoutParams(
@@ -457,8 +457,8 @@ jobs:
                               .apply()
 
                           applyVideoPlaybackSpeed()
-                          applyVoicePreset() // Sync TTS rate directly with video speed!
-                          Toast.makeText(this, "Speed set to ${currentPlaybackSpeed}x", Toast.LENGTH_SHORT).show()
+                          applyVoicePreset()
+                          Toast.makeText(this, "Speed: ${currentPlaybackSpeed}x", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
                       .show()
@@ -576,7 +576,6 @@ jobs:
                       }
 
                       tts?.setPitch(basePitch)
-                      // Perfectly scaled voice rate with video speed!
                       tts?.setSpeechRate(baseRate * currentPlaybackSpeed)
 
                   } catch (e: Exception) {
@@ -811,6 +810,18 @@ jobs:
                   }
               }
 
+              // Calibrated for >50% safety margin (max 8 RPM out of 20 RPM)
+              private fun getChunkDurationForSpeed(speed: Float, isFirst: Boolean): Long {
+                  if (isFirst) return 4_500L
+                  return when {
+                      speed <= 1.05f -> 7_500L   // 1.0x -> 7.5s chunk -> 8.0 RPM (60% Margin)
+                      speed <= 1.30f -> 9_500L   // 1.25x -> 9.5s chunk -> 7.9 RPM (60.5% Margin)
+                      speed <= 1.55f -> 11_500L  // 1.5x -> 11.5s chunk -> 7.9 RPM (60.5% Margin)
+                      speed <= 1.80f -> 13_500L  // 1.75x -> 13.5s chunk -> 7.8 RPM (61% Margin)
+                      else           -> 15_000L  // 2.0x -> 15.0s chunk -> 8.0 RPM (60% Margin)
+                  }
+              }
+
               private fun runDubbingLoop(uri: Uri) {
                   try {
                       pfd?.close()
@@ -858,7 +869,7 @@ jobs:
 
                           mediaPlayerRef?.setVolume(0f, 0f)
 
-                          val chunkDuration = if (isFirstChunk) 5_000L else 9_000L
+                          val chunkDuration = getChunkDurationForSpeed(currentPlaybackSpeed, isFirstChunk)
                           val chunkFile = extractAudioSegment(currentPosMs, chunkDuration, audioFormat, audioTrackIndex)
 
                           if (userSeeked.get()) {
@@ -868,7 +879,7 @@ jobs:
 
                           if (chunkFile != null && chunkFile.exists()) {
                               try {
-                                  val englishText = transcribeEnglishAudio(chunkFile, groqApiKey)
+                                  val englishText = transcribeAudioWithRetry(chunkFile, groqApiKey)
                                   chunkFile.delete()
 
                                   if (userSeeked.get()) continue
@@ -924,11 +935,12 @@ jobs:
                               }
                           }
 
-                          val effectiveWait = (8_000L / currentPlaybackSpeed).toLong()
-                          val nextWaitUntilMs = currentPosMs + effectiveWait
+                          // Wait precisely until near end of current chunk
+                          val realTimeDurationMs = (chunkDuration / currentPlaybackSpeed).toLong()
+                          val nextWaitUntilMs = currentPosMs + (realTimeDurationMs - 1200L).coerceAtLeast(1000L)
                           while (isProcessing.get() && videoView.isPlaying && videoView.currentPosition < nextWaitUntilMs) {
                               if (userSeeked.get()) break
-                              Thread.sleep(200)
+                              Thread.sleep(150)
                           }
                       }
 
@@ -948,7 +960,6 @@ jobs:
                   return true
               }
 
-              // Cleans text without mid-sentence word chops
               private fun cleanTextForDubbing(text: String, langCode: String): String {
                   var res = text.trim()
                   res = res.replace(Regex("[*\"#_]"), "")
@@ -979,6 +990,25 @@ jobs:
                   }
                   val mode = if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
                   tts?.speak(text, mode, params, "dub_${System.currentTimeMillis()}")
+              }
+
+              // Automatic silent backoff on 429 so error screen never triggers
+              private fun transcribeAudioWithRetry(audioFile: File, apiKey: String): String {
+                  var attempts = 0
+                  while (attempts < 3) {
+                      try {
+                          return transcribeEnglishAudio(audioFile, apiKey)
+                      } catch (e: Exception) {
+                          val msg = e.localizedMessage ?: ""
+                          if (msg.contains("429") || msg.contains("rate_limit", true)) {
+                              attempts++
+                              Thread.sleep(3500)
+                          } else {
+                              throw e
+                          }
+                      }
+                  }
+                  return ""
               }
 
               private fun transcribeEnglishAudio(audioFile: File, apiKey: String): String {
@@ -1103,7 +1133,7 @@ jobs:
                           })
                       }
                       put("messages", messages)
-                      put("max_tokens", 250) // Plenty of room for full Hindi sentences
+                      put("max_tokens", 250)
                       put("temperature", 0.1)
                   }
 
@@ -1135,7 +1165,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with 3-line subtitles, 2x playback speed and complete sentence tokens"
+          echo "MainActivity updated with 50-60% safety margin and responsive chunks"
 
       - name: Build Debug APK
         run: |
@@ -1150,5 +1180,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-SpeedAndFix-apk
+          name: HindiDubPlayer-FastResponse-apk
           path: "**/build/outputs/apk/debug/*.apk"

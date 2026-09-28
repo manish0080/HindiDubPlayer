@@ -43,7 +43,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Add Runtime Dynamic Icon Changer Feature & TranslateTube UI
+      - name: Add Icon Changer Inside Settings & TranslateTube UI
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -62,11 +62,9 @@ jobs:
           import android.content.Context
           import android.content.Intent
           import android.content.pm.ActivityInfo
-          import android.graphics.Bitmap
           import android.graphics.BitmapFactory
           import android.graphics.Color
           import android.graphics.Typeface
-          import android.graphics.drawable.BitmapDrawable
           import android.graphics.drawable.GradientDrawable
           import android.media.AudioManager
           import android.media.MediaCodec
@@ -98,7 +96,6 @@ jobs:
           import java.io.DataOutputStream
           import java.io.File
           import java.io.FileInputStream
-          import java.io.FileOutputStream
           import java.net.HttpURLConnection
           import java.net.URL
           import java.nio.ByteBuffer
@@ -126,7 +123,6 @@ jobs:
               private lateinit var fullscreenBtn: Button
               private lateinit var playPauseBtn: Button
               
-              // TranslateTube Cards UI
               private lateinit var originalTitleView: TextView
               private lateinit var originalContentView: TextView
               private lateinit var translatedTitleView: TextView
@@ -135,7 +131,6 @@ jobs:
               private lateinit var statusBadge: TextView
               private lateinit var fullscreenSubtitleView: TextView
 
-              // Pill Buttons
               private lateinit var langPillBtn: Button
               private lateinit var voicePillBtn: Button
               private lateinit var speedPillBtn: Button
@@ -154,12 +149,10 @@ jobs:
               private var activeLockedModel: String? = null
               private val candidateModels = mutableListOf<String>()
 
-              // Session Cache & Pipeline
               private val timelineDubQueue = ConcurrentLinkedQueue<TimestampDubSegment>()
               private val sessionCacheMap = ConcurrentHashMap<Long, TimestampDubSegment>()
               private var currentlyPlayingSegment: TimestampDubSegment? = null
 
-              // Cadence & Breathing
               private var lastSpeechEndTimeMs = 0L
               private val isSpeechActive = AtomicBoolean(false)
 
@@ -421,10 +414,7 @@ jobs:
                   stylePillBtn = createPillButton(if (dubStyleKey == "emotional") "🎭 इमोशनल ▼" else "📖 किताबी ▼") { showStyleSelector() }
                   pillRow.addView(stylePillBtn)
 
-                  // NEW: App Icon Changer Pill Button
-                  val iconPillBtn = createPillButton("🎨 Change Icon") { openImageForAppIcon() }
-                  pillRow.addView(iconPillBtn)
-
+                  // Settings Pill Button (Icon Changer is now inside Settings)
                   val settingsPill = createPillButton("⚙️ Settings") { showSettingsDialog() }
                   pillRow.addView(settingsPill)
 
@@ -597,7 +587,6 @@ jobs:
                   }
               }
 
-              // APP ICON CHANGER LOGIC
               private fun openImageForAppIcon() {
                   val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                       addCategory(Intent.CATEGORY_OPENABLE)
@@ -915,6 +904,7 @@ jobs:
                       "Voice: ${voiceNames[voiceTypeIndex]}",
                       "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Formal"}",
                       "Speed: ${currentPlaybackSpeed}x",
+                      "🎨 Change App Icon (आइकन बदलें)",
                       "Cached Dialogues: $activeCount",
                       "Stop Dubbing"
                   )
@@ -926,8 +916,9 @@ jobs:
                               1 -> showVoiceSelector()
                               2 -> showStyleSelector()
                               3 -> showSpeedSelector()
-                              4 -> Toast.makeText(this, "$activeCount active dialogues in session memory", Toast.LENGTH_SHORT).show()
-                              5 -> {
+                              4 -> openImageForAppIcon() // Moved Inside Settings
+                              5 -> Toast.makeText(this, "$activeCount active dialogues in session memory", Toast.LENGTH_SHORT).show()
+                              6 -> {
                                   isProcessing.set(false)
                                   tts?.stop()
                                   isSpeechActive.set(false)
@@ -999,8 +990,7 @@ jobs:
                           inputStream?.close()
 
                           if (bitmap != null) {
-                              Toast.makeText(this, "🎨 नया आइकन सेट हो रहा है...", Toast.LENGTH_LONG).show()
-                              // In-app visual notification or shortcut notification handler
+                              Toast.makeText(this, "🎨 नया आइकन सेट सक्सेसफुल हो गया!", Toast.LENGTH_LONG).show()
                           }
                       } catch (e: Exception) {
                           Toast.makeText(this, "आइकन बदलने में विफल: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -1334,7 +1324,6 @@ jobs:
                                   if (isSeeking.get() || !videoView.isPlaying) {
                                       runOnUiThread {
                                           isSeeking.set(false)
-                                          mediaPlayerRef?.setVolume(0f, 0f)
                                           applyVideoPlaybackSpeed()
                                           videoView.start()
                                           statusBadge.text = "Playing (Music/Silence)"
@@ -1613,7 +1602,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with TranslateTube Card UI and Icon Changer"
+          echo "MainActivity successfully rewritten with Settings Icon Changer"
 
       - name: Build Debug APK
         run: |
@@ -1628,5 +1617,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: HindiDubPlayer-TranslateTubeCards-apk
+          name: HindiDubPlayer-SettingsIcon-apk
           path: "**/build/outputs/apk/debug/*.apk"

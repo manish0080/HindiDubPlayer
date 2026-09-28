@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Synced Fast Dubber
+      - name: Replace MainActivity With Bulletproof Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -113,7 +113,6 @@ jobs:
 
               private var lastErrorDetails = "No errors reported."
               private var processedSegments = 0
-              private var activeSelectedModel = "llama-3.3-70b-versatile"
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
@@ -163,7 +162,6 @@ jobs:
                   targetLangName = prefs.getString("LANG_NAME", "Hindi") ?: "Hindi"
                   voiceTypeIndex = prefs.getInt("VOICE_INDEX", 0)
                   dubStyleKey = prefs.getString("DUB_STYLE", "emotional") ?: "emotional"
-                  activeSelectedModel = prefs.getString("SAVED_MODEL", "llama-3.3-70b-versatile") ?: "llama-3.3-70b-versatile"
 
                   val rootLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -295,7 +293,8 @@ jobs:
                       )
                       setOnClickListener {
                           val uri = selectedVideoUri ?: return@setOnClickListener
-                          visibility = View.GONE
+                          isEnabled = false
+                          text = "⏳ Preparing Dubbing (3 sec)..."
                           errorBox.visibility = View.GONE
                           startDubbingProcess(uri)
                       }
@@ -498,7 +497,6 @@ jobs:
                       "Target: $targetLangName ($targetLangCode)",
                       "Voice: ${voiceNames[voiceTypeIndex]}",
                       "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Formal"}",
-                      "Active Model: $activeSelectedModel",
                       "View Last Error Details",
                       "Stop Dubbing"
                   )
@@ -509,20 +507,21 @@ jobs:
                               0 -> showLanguageSelector()
                               1 -> showVoiceSelector()
                               2 -> showStyleSelector()
-                              3 -> Toast.makeText(this, "Model: $activeSelectedModel", Toast.LENGTH_SHORT).show()
-                              4 -> {
+                              3 -> {
                                   AlertDialog.Builder(this)
                                       .setTitle("Last Error Info")
                                       .setMessage(lastErrorDetails)
                                       .setPositiveButton("OK", null)
                                       .show()
                               }
-                              5 -> {
+                              4 -> {
                                   isProcessing.set(false)
                                   tts?.stop()
                                   videoView.pause()
                                   saveCurrentPosition()
                                   statusText.text = "Dubbing Stopped."
+                                  centerStartBtn.isEnabled = true
+                                  centerStartBtn.text = "▶ START LIVE DUBBING"
                                   centerStartBtn.visibility = View.VISIBLE
                               }
                           }
@@ -555,11 +554,15 @@ jobs:
                               .setPositiveButton("Resume") { _, _ ->
                                   videoView.seekTo(savedPos)
                                   statusText.text = "Resumed at ${formatTime(savedPos.toLong())}. Tap START."
+                                  centerStartBtn.isEnabled = true
+                                  centerStartBtn.text = "▶ START LIVE DUBBING"
                                   centerStartBtn.visibility = View.VISIBLE
                               }
                               .setNegativeButton("Start from beginning") { _, _ ->
                                   videoView.seekTo(1)
                                   statusText.text = "Video loaded. Tap START."
+                                  centerStartBtn.isEnabled = true
+                                  centerStartBtn.text = "▶ START LIVE DUBBING"
                                   centerStartBtn.visibility = View.VISIBLE
                               }
                               .setCancelable(false)
@@ -567,6 +570,8 @@ jobs:
                       } else {
                           videoView.seekTo(1)
                           statusText.text = "Video ready! Tap 'START LIVE DUBBING'."
+                          centerStartBtn.isEnabled = true
+                          centerStartBtn.text = "▶ START LIVE DUBBING"
                           centerStartBtn.visibility = View.VISIBLE
                       }
                   }
@@ -575,7 +580,7 @@ jobs:
               private fun startDubbingProcess(uri: Uri) {
                   isProcessing.set(true)
                   processedSegments = 0
-                  statusText.text = "⏳ Buffering audio (Starting in 1-2 sec)..."
+                  statusText.text = "Extracting first audio segment..."
 
                   Thread {
                       startLiveStreamingPipeline(uri)
@@ -589,7 +594,7 @@ jobs:
                       pfd = contentResolver.openFileDescriptor(uri, "r")
                       val descriptor = pfd?.fileDescriptor
                       if (descriptor == null) {
-                          showError("Cannot access video file stream")
+                          showError("Cannot access video file")
                           return
                       }
 
@@ -623,30 +628,28 @@ jobs:
 
                       while (hasMoreAudio && isProcessing.get()) {
 
-                          // Fast start: Chunk 0 is only 5s. Subsequent chunks are 10s.
-                          val chunkDurationUs = if (chunkIndex == 0) 5_000_000L else 10_000_000L
+                          // Chunk 0 is 6s (super fast start). Chunks after that are 15s (Strictly under 4 RPM!)
+                          val chunkDurationUs = if (chunkIndex == 0) 6_000_000L else 15_000_000L
 
-                          // Instant jump handling
+                          // Jump support
                           val targetSeek = seekTargetUs.getAndSet(-1L)
                           if (targetSeek >= 0) {
                               extractor.seekTo(targetSeek, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
                           }
 
-                          // CRITICAL PACING FIX: Strict sync with actual video playback
+                          // CRITICAL SYNC: Never process next chunk until video actually reaches timeline
                           if (chunkIndex > 0) {
-                              // 1. If video is paused by user, wait!
                               while (isProcessing.get() && !videoView.isPlaying && seekTargetUs.get() < 0) {
                                   Thread.sleep(250)
                               }
 
-                              // 2. Wait until video reaches current chunk's timeline so we never rush ahead of video
-                              val expectedChunkTimeMs = (if (chunkIndex == 1) 5000L else 5000L + (chunkIndex - 1) * 10000L)
+                              val expectedChunkTimeMs = (if (chunkIndex == 1) 6000L else 6000L + (chunkIndex - 1) * 15000L)
                               while (isProcessing.get() && videoView.isPlaying && seekTargetUs.get() < 0) {
                                   val currentPosMs = videoView.currentPosition
-                                  if (currentPosMs >= expectedChunkTimeMs - 2000L) {
-                                      break // Ready to process next chunk
+                                  if (currentPosMs >= expectedChunkTimeMs - 3000L) {
+                                      break
                                   }
-                                  Thread.sleep(300)
+                                  Thread.sleep(350)
                               }
                           }
 
@@ -713,20 +716,24 @@ jobs:
                           if (chunkFile.exists() && chunkFile.length() > 500) {
                               try {
                                   runOnUiThread {
-                                      statusText.text = "Translating part $currentChunkNum..."
+                                      statusText.text = if (chunkIndex == 0) "Starting AI Engine..." else "Listening (Part $currentChunkNum)..."
                                   }
 
                                   val recognizedText = transcribeAudioWithRetry(chunkFile, groqApiKey)
 
                                   if (recognizedText.isNotBlank()) {
-                                      val dubbedText = translateWithRetry(recognizedText, targetLangName, dubStyleKey, activeSelectedModel, groqApiKey)
+                                      runOnUiThread {
+                                          statusText.text = "Translating ($targetLangName)..."
+                                      }
+
+                                      val dubbedText = translateWithFallback(recognizedText, targetLangName, dubStyleKey, groqApiKey)
 
                                       runOnUiThread {
                                           processedSegments++
                                           saveCurrentPosition()
 
-                                          // Auto-start video on chunk 0
-                                          if (chunkIndex == 0 && !videoView.isPlaying) {
+                                          if (chunkIndex == 0) {
+                                              centerStartBtn.visibility = View.GONE
                                               videoView.seekTo(0)
                                               videoView.start()
                                               statusText.text = "Playing ($targetLangName) ✓\n\n$dubbedText"
@@ -737,12 +744,13 @@ jobs:
                                           }
                                       }
                                   } else {
-                                      // Silence / No speech in this segment
-                                      if (chunkIndex == 0 && !videoView.isPlaying) {
+                                      // Silence / Background sound only
+                                      if (chunkIndex == 0) {
                                           runOnUiThread {
+                                              centerStartBtn.visibility = View.GONE
                                               videoView.seekTo(0)
                                               videoView.start()
-                                              statusText.text = "Playing (Listening for dialogues...)"
+                                              statusText.text = "Playing (Waiting for speech...)"
                                           }
                                       }
                                   }
@@ -772,6 +780,8 @@ jobs:
                       errorBox.text = "⚠️ $msg\n(Tap ⚙️ Menu for details)"
                       errorBox.visibility = View.VISIBLE
                       statusText.text = "Dubbing Paused on Error"
+                      centerStartBtn.isEnabled = true
+                      centerStartBtn.text = "▶ START LIVE DUBBING"
                       centerStartBtn.visibility = View.VISIBLE
                   }
               }
@@ -800,7 +810,7 @@ jobs:
                           }
                       }
                   }
-                  throw Exception("Audio transcription busy. Retrying...")
+                  throw Exception("Whisper busy. Retrying...")
               }
 
               private fun transcribeAudio(audioFile: File, apiKey: String): String {
@@ -856,22 +866,17 @@ jobs:
                   }
               }
 
-              private fun translateWithRetry(text: String, targetLang: String, style: String, model: String, apiKey: String): String {
-                  var attempts = 0
-                  while (attempts < 3) {
+              // Direct Fallback translation: Tries llama-3.3-70b-versatile, if fails immediately tries llama-3.1-8b-instant
+              private fun translateWithFallback(text: String, targetLang: String, style: String, apiKey: String): String {
+                  return try {
+                      translateToLang(text, targetLang, style, "llama-3.3-70b-versatile", apiKey)
+                  } catch (e1: Exception) {
                       try {
-                          return translateToLang(text, targetLang, style, model, apiKey)
-                      } catch (e: Exception) {
-                          val msg = e.localizedMessage ?: ""
-                          if (msg.contains("429") || msg.contains("rate_limit", ignoreCase = true)) {
-                              attempts++
-                              Thread.sleep(3000)
-                          } else {
-                              throw e
-                          }
+                          translateToLang(text, targetLang, style, "llama-3.1-8b-instant", apiKey)
+                      } catch (e2: Exception) {
+                          translateToLang(text, targetLang, style, "mixtral-8x7b-32768", apiKey)
                       }
                   }
-                  throw Exception("Translation server busy. Retrying...")
               }
 
               private fun translateToLang(sourceText: String, targetLang: String, style: String, modelName: String, apiKey: String): String {
@@ -936,7 +941,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with Fast Auto-Start and Sync Pacing"
+          echo "MainActivity successfully rewritten with bulletproof architecture"
 
       - name: Build Debug APK
         run: |
@@ -951,5 +956,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-PacingFixed-apk
+          name: HindiDubPlayer-Bulletproof-apk
           path: "**/build/outputs/apk/debug/*.apk"

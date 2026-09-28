@@ -40,7 +40,6 @@ jobs:
           find . -name "AndroidManifest.xml" -exec sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />' {} + || true
           find . -name "AndroidManifest.xml" -exec sed -i 's/<activity /<activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize" /g' {} + || true
           
-          # Setup App Icon in AndroidManifest and create vector drawable assets if missing
           find . -name "AndroidManifest.xml" -exec sed -i 's/android:icon="@[^"]*"/android:icon="@mipmap/ic_launcher"/g' {} + || true
           find . -name "AndroidManifest.xml" -exec sed -i 's/android:roundIcon="@[^"]*"/android:roundIcon="@mipmap/ic_launcher_round"/g' {} + || true
 
@@ -49,7 +48,6 @@ jobs:
             mkdir -p "$RES_DIR/mipmap-anydpi-v26"
             mkdir -p "$RES_DIR/drawable"
             
-            # Create ic_launcher.xml for adaptive icon foreground/background
             cat << 'EOF' > "$RES_DIR/mipmap-anydpi-v26/ic_launcher.xml"
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
@@ -66,7 +64,6 @@ EOF
 </adaptive-icon>
 EOF
 
-            # Create Launcher Background (Deep Blue to Orange Gradient)
             cat << 'EOF' > "$RES_DIR/drawable/ic_launcher_background.xml"
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
@@ -79,7 +76,6 @@ EOF
 </shape>
 EOF
 
-            # Create Launcher Foreground (Play Icon + Subtitle Wave Graphic)
             cat << 'EOF' > "$RES_DIR/drawable/ic_launcher_foreground.xml"
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -875,7 +871,7 @@ EOF
                       val effectiveRole = if (voiceTypeIndex == 0) {
                           speakerType.lowercase()
                       } else {
-                          when (voiceTypeIndex) {
+                        when (voiceTypeIndex) {
                               1 -> "man"
                               2 -> "woman"
                               3 -> "boy"

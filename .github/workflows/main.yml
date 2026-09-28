@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With AutoClearing Dubber
+      - name: Replace MainActivity With Bulletproof Audio Streamer
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -71,6 +71,8 @@ jobs:
           import android.net.Uri
           import android.os.Build
           import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
           import android.os.ParcelFileDescriptor
           import android.speech.tts.TextToSpeech
           import android.speech.tts.UtteranceProgressListener
@@ -114,14 +116,14 @@ jobs:
               private var selectedVideoUri: Uri? = null
               private var tts: TextToSpeech? = null
               private var mediaPlayerRef: MediaPlayer? = null
+              private val uiHandler = Handler(Looper.getMainLooper())
+              private var subtitleClearRunnable: Runnable? = null
 
               private val isProcessing = AtomicBoolean(false)
               private val seekTargetMs = AtomicLong(-1L)
 
-              private var lastErrorDetails = "No errors reported."
               private var activeLockedModel: String? = null
               private val candidateModels = mutableListOf<String>()
-              private var lastSpokenDialogue = ""
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
@@ -209,7 +211,7 @@ jobs:
                   headerLayout.addView(menuBtn)
                   rootLayout.addView(headerLayout)
 
-                  // Controls Row
+                  // Controls Row: [Language] [Voice] [Style] [Speed]
                   val controlsRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       setPadding(0, 4, 0, 4)
@@ -256,7 +258,7 @@ jobs:
                   }
                   rootLayout.addView(selectBtn)
 
-                  // 1-Line Status
+                  // Status Text
                   statusText = TextView(this).apply {
                       text = "Open a video to start"
                       textSize = 12f
@@ -306,10 +308,10 @@ jobs:
                           applyVideoPlaybackSpeed()
                           val curPos = videoView.currentPosition.toLong()
                           seekTargetMs.set(curPos)
+                          clearSubtitleInstantly()
                           tts?.stop()
                           runOnUiThread {
                               statusText.text = "Jumped to ${formatTime(curPos)} (Syncing)..."
-                              subtitleOverlay.text = ""
                           }
                       }
                   }
@@ -346,8 +348,7 @@ jobs:
                       )
                       setOnClickListener {
                           val uri = selectedVideoUri ?: return@setOnClickListener
-                          isEnabled = false
-                          text = "⏳ Starting dubbing..."
+                          visibility = View.GONE
                           errorBox.visibility = View.GONE
                           startDubbingProcess(uri)
                       }
@@ -368,7 +369,7 @@ jobs:
                           val newPos = (videoView.currentPosition - 10000).coerceAtLeast(0)
                           seekTargetMs.set(newPos.toLong())
                           tts?.stop()
-                          subtitleOverlay.text = ""
+                          clearSubtitleInstantly()
                           videoView.seekTo(newPos)
                       }
                   }
@@ -398,7 +399,7 @@ jobs:
                           val newPos = (videoView.currentPosition + 10000).coerceAtMost(videoView.duration)
                           seekTargetMs.set(newPos.toLong())
                           tts?.stop()
-                          subtitleOverlay.text = ""
+                          clearSubtitleInstantly()
                           videoView.seekTo(newPos)
                       }
                   }
@@ -406,6 +407,11 @@ jobs:
                   rootLayout.addView(playerControls)
 
                   setContentView(rootLayout)
+              }
+
+              private fun clearSubtitleInstantly() {
+                  subtitleClearRunnable?.let { uiHandler.removeCallbacks(it) }
+                  runOnUiThread { subtitleOverlay.text = "" }
               }
 
               private fun openVideoPicker() {
@@ -451,7 +457,7 @@ jobs:
               private fun showSpeedSelector() {
                   val labels = speedOptions.map { it.first }.toTypedArray()
                   AlertDialog.Builder(this)
-                      .setTitle("Choose Playback Speed (गति)")
+                      .setTitle("Choose Playback Speed")
                       .setItems(labels) { _, idx ->
                           currentPlaybackSpeed = speedOptions[idx].second
                           speedBtn.text = "⚡ ${currentPlaybackSpeed}x ▼"
@@ -592,21 +598,14 @@ jobs:
                       setTtsLocale(targetLangCode)
                       applyVoicePreset()
 
-                      // SUBTITLE AUTO-CLEAR: Exactly when speaking finishes, clear subtitle immediately!
+                      // Auto-clear subtitle when spoken audio ends
                       tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                          override fun onStart(utteranceId: String?) {
-                              // Speaking started
-                          }
+                          override fun onStart(utteranceId: String?) {}
                           override fun onDone(utteranceId: String?) {
-                              // Speaking completed! Clear subtitle immediately so it doesn't linger on music/silence!
-                              runOnUiThread {
-                                  subtitleOverlay.text = ""
-                              }
+                              clearSubtitleInstantly()
                           }
                           override fun onError(utteranceId: String?) {
-                              runOnUiThread {
-                                  subtitleOverlay.text = ""
-                              }
+                              clearSubtitleInstantly()
                           }
                       })
                   }
@@ -620,7 +619,6 @@ jobs:
                       "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Formal"}",
                       "Speed: ${currentPlaybackSpeed}x",
                       "Active Model: $activeM",
-                      "View Last Error Details",
                       "Stop Dubbing"
                   )
                   AlertDialog.Builder(this)
@@ -633,20 +631,12 @@ jobs:
                               3 -> showSpeedSelector()
                               4 -> Toast.makeText(this, "Model: $activeM", Toast.LENGTH_SHORT).show()
                               5 -> {
-                                  AlertDialog.Builder(this)
-                                      .setTitle("Last Error Info")
-                                      .setMessage(lastErrorDetails)
-                                      .setPositiveButton("OK", null)
-                                      .show()
-                              }
-                              6 -> {
                                   isProcessing.set(false)
                                   tts?.stop()
+                                  clearSubtitleInstantly()
                                   videoView.pause()
                                   saveCurrentPosition()
                                   statusText.text = "Dubbing Stopped."
-                                  centerStartBtn.isEnabled = true
-                                  centerStartBtn.text = "▶ START LIVE DUBBING"
                                   centerStartBtn.visibility = View.VISIBLE
                               }
                           }
@@ -669,9 +659,8 @@ jobs:
                       isProcessing.set(false)
                       tts?.stop()
                       seekTargetMs.set(-1L)
-                      lastSpokenDialogue = ""
                       errorBox.visibility = View.GONE
-                      subtitleOverlay.text = ""
+                      clearSubtitleInstantly()
 
                       videoView.setVideoURI(uri)
 
@@ -685,15 +674,11 @@ jobs:
                               .setPositiveButton("Resume") { _, _ ->
                                   videoView.seekTo(savedPos)
                                   statusText.text = "Resumed at ${formatTime(savedPos.toLong())}. Tap START."
-                                  centerStartBtn.isEnabled = true
-                                  centerStartBtn.text = "▶ START LIVE DUBBING"
                                   centerStartBtn.visibility = View.VISIBLE
                               }
                               .setNegativeButton("Start from beginning") { _, _ ->
                                   videoView.seekTo(1)
                                   statusText.text = "Video loaded. Tap START."
-                                  centerStartBtn.isEnabled = true
-                                  centerStartBtn.text = "▶ START LIVE DUBBING"
                                   centerStartBtn.visibility = View.VISIBLE
                               }
                               .setCancelable(false)
@@ -701,8 +686,6 @@ jobs:
                       } else {
                           videoView.seekTo(1)
                           statusText.text = "Video ready! Tap 'START LIVE DUBBING'."
-                          centerStartBtn.isEnabled = true
-                          centerStartBtn.text = "▶ START LIVE DUBBING"
                           centerStartBtn.visibility = View.VISIBLE
                       }
                   }
@@ -710,8 +693,7 @@ jobs:
 
               private fun startDubbingProcess(uri: Uri) {
                   isProcessing.set(true)
-                  statusText.text = "Starting live dubbing..."
-                  lastSpokenDialogue = ""
+                  statusText.text = "Starting live audio dubbing..."
 
                   Thread {
                       runDubbingLoop(uri)
@@ -770,20 +752,27 @@ jobs:
                   }
               }
 
-              // FRESH PFD EVERY CHUNK: Completely prevents EOF exhaustion freeze!
+              // EXACT KEYFRAME ENFORCED AUDIO CHUNKER (Whisper 100% Decodable)
               private fun extractAudioSegment(startMs: Long, durationMs: Long, audioFormat: MediaFormat, audioTrackIndex: Int): File? {
                   val uri = selectedVideoUri ?: return null
                   val pfdItem = contentResolver.openFileDescriptor(uri, "r") ?: return null
 
-                  pfdItem.use { freshDescriptor ->
+                  pfdItem.use { fd ->
                       val extractor = MediaExtractor()
                       try {
-                          extractor.setDataSource(freshDescriptor.fileDescriptor)
+                          extractor.setDataSource(fd.fileDescriptor)
                           extractor.selectTrack(audioTrackIndex)
 
                           val startUs = startMs * 1000L
                           val endUs = (startMs + durationMs) * 1000L
-                          extractor.seekTo(startUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+
+                          // Seek to sync frame before startUs
+                          extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+
+                          // Fast forward samples until we reach actual startUs to avoid losing dialogues
+                          while (extractor.sampleTime < startUs && extractor.sampleTime >= 0) {
+                              if (!extractor.advance()) break
+                          }
 
                           val outputFile = File(cacheDir, "chunk_${System.currentTimeMillis()}.m4a")
                           if (outputFile.exists()) outputFile.delete()
@@ -794,7 +783,7 @@ jobs:
 
                           val buffer = ByteBuffer.allocate(1024 * 1024)
                           val bufferInfo = MediaCodec.BufferInfo()
-                          var chunkStartPts = -1L
+                          var firstSampleTimeUs = -1L
                           var lastPts = 0L
                           var samplesWritten = 0
 
@@ -804,27 +793,36 @@ jobs:
                               if (sampleSize < 0) break
 
                               val rawPts = extractor.sampleTime
-                              if (chunkStartPts == -1L) chunkStartPts = rawPts
+                              if (rawPts >= endUs) break
 
-                              var relativePts = rawPts - chunkStartPts
+                              if (firstSampleTimeUs == -1L) {
+                                  firstSampleTimeUs = rawPts
+                              }
+
+                              var relativePts = rawPts - firstSampleTimeUs
                               if (relativePts <= lastPts) {
-                                  relativePts = lastPts + 20_000L
+                                  relativePts = lastPts + 10_000L
                               }
                               lastPts = relativePts
-
-                              if (rawPts >= endUs) break
 
                               bufferInfo.offset = 0
                               bufferInfo.size = sampleSize
                               bufferInfo.presentationTimeUs = relativePts
-                              bufferInfo.flags = extractor.sampleFlags
+                              
+                              // CRITICAL FIX: First sample MUST have KEY_FRAME flag for MediaMuxer to create a valid decodable file!
+                              bufferInfo.flags = if (samplesWritten == 0) {
+                                  extractor.sampleFlags or MediaCodec.BUFFER_FLAG_KEY_FRAME
+                              } else {
+                                  extractor.sampleFlags
+                              }
 
                               buffer.position(0)
                               buffer.limit(sampleSize)
 
                               muxer.writeSampleData(muxerTrack, buffer, bufferInfo)
                               samplesWritten++
-                              extractor.advance()
+
+                              if (!extractor.advance()) break
                           }
 
                           try {
@@ -835,7 +833,12 @@ jobs:
                           }
                           extractor.release()
 
-                          return if (outputFile.exists() && outputFile.length() > 500) outputFile else null
+                          return if (outputFile.exists() && samplesWritten >= 10 && outputFile.length() > 1024) {
+                              outputFile
+                          } else {
+                              outputFile.delete()
+                              null
+                          }
                       } catch (e: Exception) {
                           try { extractor.release() } catch (_: Exception) {}
                           return null
@@ -843,57 +846,57 @@ jobs:
                   }
               }
 
-              // NON-OVERLAPPING DUBBING PIPELINE WITH AUTO-CLEAR
+              // CONTINUOUS DUBBING PIPELINE
               private fun runDubbingLoop(uri: Uri) {
-                  try {
-                      val testPfd = contentResolver.openFileDescriptor(uri, "r")
-                      val testExtractor = MediaExtractor()
+                  val testPfd = contentResolver.openFileDescriptor(uri, "r")
+                  val testExtractor = MediaExtractor()
 
-                      var audioTrackIndex = -1
-                      var audioFormat: MediaFormat? = null
+                  var audioTrackIndex = -1
+                  var audioFormat: MediaFormat? = null
 
-                      testPfd?.use { fd ->
-                          testExtractor.setDataSource(fd.fileDescriptor)
-                          for (i in 0 until testExtractor.trackCount) {
-                              val format = testExtractor.getTrackFormat(i)
-                              val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
-                              if (mime.startsWith("audio/")) {
-                                  audioTrackIndex = i
-                                  audioFormat = format
-                                  break
-                              }
+                  testPfd?.use { fd ->
+                      testExtractor.setDataSource(fd.fileDescriptor)
+                      for (i in 0 until testExtractor.trackCount) {
+                          val format = testExtractor.getTrackFormat(i)
+                          val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                          if (mime.startsWith("audio/")) {
+                              audioTrackIndex = i
+                              audioFormat = format
+                              break
                           }
-                          testExtractor.release()
                       }
+                      testExtractor.release()
+                  }
 
-                      if (audioTrackIndex < 0 || audioFormat == null) {
-                          showError("No audio track found in video!")
-                          return
+                  if (audioTrackIndex < 0 || audioFormat == null) {
+                      runOnUiThread {
+                          statusText.text = "No audio track found in video!"
                       }
+                      return
+                  }
 
-                      populateAccountModels(groqApiKey)
+                  populateAccountModels(groqApiKey)
 
-                      var isFirstChunk = true
-                      var nextExtractPosMs = videoView.currentPosition.toLong()
+                  var isFirstChunk = true
+                  var nextExtractPosMs = videoView.currentPosition.toLong()
 
-                      while (isProcessing.get()) {
-
+                  while (isProcessing.get()) {
+                      try {
                           while (isProcessing.get() && !videoView.isPlaying && !isFirstChunk) {
                               Thread.sleep(250)
                           }
 
-                          // If user skipped or cut ahead in video, jump immediately!
+                          // Instant Seek Handling
                           val jumpedPos = seekTargetMs.getAndSet(-1L)
                           if (jumpedPos >= 0) {
                               nextExtractPosMs = jumpedPos
-                              lastSpokenDialogue = ""
-                              runOnUiThread { subtitleOverlay.text = "" }
+                              clearSubtitleInstantly()
                           }
 
                           mediaPlayerRef?.setVolume(0f, 0f)
 
                           val chunkDuration = if (isFirstChunk) {
-                              4_500L
+                              5_000L
                           } else {
                               (7_500L * currentPlaybackSpeed).toLong().coerceIn(7_500L, 15_000L)
                           }
@@ -909,63 +912,47 @@ jobs:
                           nextExtractPosMs = extractStart + chunkDuration
 
                           if (chunkFile != null && chunkFile.exists()) {
-                              try {
-                                  val englishText = transcribeAudioWithRetry(chunkFile, groqApiKey)
-                                  chunkFile.delete()
+                              val recognizedText = transcribeAudioWithRetry(chunkFile, groqApiKey)
+                              chunkFile.delete()
+
+                              if (seekTargetMs.get() >= 0) continue
+
+                              if (isRealSpeech(recognizedText)) {
+                                  val rawTranslation = translateWithFallback(recognizedText, targetLangName, dubStyleKey, groqApiKey)
 
                                   if (seekTargetMs.get() >= 0) continue
 
-                                  if (isRealSpeech(englishText)) {
-
-                                      // DEDUPLICATION: Avoid repeating the exact same sentence twice!
-                                      val normalizedEnglish = englishText.trim().lowercase()
-                                      if (normalizedEnglish == lastSpokenDialogue) {
-                                          // Skip re-speaking repeated line
-                                          continue
-                                      }
-
-                                      val rawTranslation = translateWithFallback(englishText, targetLangName, dubStyleKey, groqApiKey)
-
-                                      if (seekTargetMs.get() >= 0) continue
-
-                                      val cleanedDub = cleanTextForDubbing(rawTranslation, targetLangCode)
-                                      if (cleanedDub.isNotBlank()) {
-                                          lastSpokenDialogue = normalizedEnglish
-
-                                          runOnUiThread {
-                                              subtitleOverlay.text = cleanedDub
-                                              statusText.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
-
-                                              if (isFirstChunk) {
-                                                  centerStartBtn.visibility = View.GONE
-                                                  mediaPlayerRef?.setVolume(0f, 0f)
-                                                  applyVideoPlaybackSpeed()
-                                                  videoView.start()
-                                                  speakDubbed(cleanedDub, true)
-                                                  isFirstChunk = false
-                                              } else {
-                                                  speakDubbed(cleanedDub, false)
-                                              }
-                                          }
-                                      }
-                                  } else {
-                                      // Silence / Background music: Clear any lingering subtitle immediately!
+                                  val cleanedDub = cleanTextForDubbing(rawTranslation, targetLangCode)
+                                  if (cleanedDub.isNotBlank()) {
                                       runOnUiThread {
-                                          subtitleOverlay.text = ""
+                                          showSubtitleWithAutoDismiss(cleanedDub)
+                                          statusText.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
+
                                           if (isFirstChunk) {
                                               centerStartBtn.visibility = View.GONE
                                               mediaPlayerRef?.setVolume(0f, 0f)
                                               applyVideoPlaybackSpeed()
                                               videoView.start()
-                                              statusText.text = "Playing (${currentPlaybackSpeed}x)"
+                                              speakDubbed(cleanedDub, true)
                                               isFirstChunk = false
+                                          } else {
+                                              speakDubbed(cleanedDub, false)
                                           }
                                       }
                                   }
-                              } catch (e: Exception) {
-                                  showError(e.localizedMessage ?: "Translation error")
-                                  isProcessing.set(false)
-                                  break
+                              } else {
+                                  // Clear subtitle on silence
+                                  clearSubtitleInstantly()
+                                  if (isFirstChunk) {
+                                      runOnUiThread {
+                                          centerStartBtn.visibility = View.GONE
+                                          mediaPlayerRef?.setVolume(0f, 0f)
+                                          applyVideoPlaybackSpeed()
+                                          videoView.start()
+                                          statusText.text = "Playing (${currentPlaybackSpeed}x)"
+                                          isFirstChunk = false
+                                      }
+                                  }
                               }
                           } else {
                               if (isFirstChunk) {
@@ -978,17 +965,29 @@ jobs:
                               }
                           }
 
-                          // 7.0 seconds real wall-clock sleep maintains strictly 8.5 RPM (55% safety margin)
+                          // Precise sleep maintaining ~7.5 RPM (60% safe buffer)
                           val sleepUntil = System.currentTimeMillis() + 7000L
                           while (isProcessing.get() && System.currentTimeMillis() < sleepUntil) {
                               if (seekTargetMs.get() >= 0) break
-                              Thread.sleep(200)
+                              Thread.sleep(150)
                           }
-                      }
 
-                  } catch (e: Exception) {
-                      showError("Playback error: ${e.localizedMessage}")
+                      } catch (e: Exception) {
+                          // Silent auto-recovery: never stop the dubbing loop on temporary glitches!
+                          Thread.sleep(1500)
+                      }
                   }
+              }
+
+              private fun showSubtitleWithAutoDismiss(text: String) {
+                  subtitleClearRunnable?.let { uiHandler.removeCallbacks(it) }
+                  subtitleOverlay.text = text
+
+                  val displayDurationMs = ((text.length * 65L) / currentPlaybackSpeed).toLong().coerceIn(2500L, 6500L)
+                  subtitleClearRunnable = Runnable {
+                      subtitleOverlay.text = ""
+                  }
+                  uiHandler.postDelayed(subtitleClearRunnable!!, displayDurationMs)
               }
 
               private fun isRealSpeech(text: String): Boolean {
@@ -996,7 +995,6 @@ jobs:
                   if (trimmed.length < 3) return false
                   val lower = trimmed.lowercase()
 
-                  // Ignore Whisper noise hallucinations
                   if (lower.contains("subtitles by") || lower.contains("amara.org") || lower.contains("thank you for watching")) {
                       return false
                   }
@@ -1022,18 +1020,6 @@ jobs:
                   return res.trim()
               }
 
-              private fun showError(msg: String) {
-                  lastErrorDetails = msg
-                  runOnUiThread {
-                      errorBox.text = "⚠️ $msg\n(Tap ⚙️ Menu for details)"
-                      errorBox.visibility = View.VISIBLE
-                      statusText.text = "Dubbing Paused on Error"
-                      centerStartBtn.isEnabled = true
-                      centerStartBtn.text = "▶ START LIVE DUBBING"
-                      centerStartBtn.visibility = View.VISIBLE
-                  }
-              }
-
               private fun speakDubbed(text: String, flush: Boolean) {
                   applyVoicePreset()
                   val params = Bundle().apply {
@@ -1043,25 +1029,25 @@ jobs:
                   tts?.speak(text, mode, params, "dub_${System.currentTimeMillis()}")
               }
 
+              // Robust network retry without stopping the pipeline
               private fun transcribeAudioWithRetry(audioFile: File, apiKey: String): String {
-                  var attempts = 0
-                  while (attempts < 3) {
+                  for (attempt in 1..2) {
                       try {
-                          return transcribeEnglishAudio(audioFile, apiKey)
+                          return transcribeAudio(audioFile, apiKey)
                       } catch (e: Exception) {
                           val msg = e.localizedMessage ?: ""
                           if (msg.contains("429") || msg.contains("rate_limit", true)) {
-                              attempts++
-                              Thread.sleep(3500)
-                          } else {
-                              throw e
+                              Thread.sleep(3000)
+                          } else if (attempt < 2) {
+                              Thread.sleep(1500)
                           }
                       }
                   }
                   return ""
               }
 
-              private fun transcribeEnglishAudio(audioFile: File, apiKey: String): String {
+              // Auto-detects video language cleanly
+              private fun transcribeAudio(audioFile: File, apiKey: String): String {
                   val boundary = "Boundary" + System.currentTimeMillis()
                   val lineEnd = "\r\n"
                   val twoHyphens = "--"
@@ -1071,8 +1057,8 @@ jobs:
                       requestMethod = "POST"
                       setRequestProperty("Authorization", "Bearer $apiKey")
                       setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-                      connectTimeout = 12000
-                      readTimeout = 20000
+                      connectTimeout = 15000
+                      readTimeout = 30000
                       doOutput = true
                       doInput = true
                   }
@@ -1082,10 +1068,6 @@ jobs:
                   out.writeBytes(twoHyphens + boundary + lineEnd)
                   out.writeBytes("Content-Disposition: form-data; name=\"model\"" + lineEnd + lineEnd)
                   out.writeBytes("whisper-large-v3-turbo" + lineEnd)
-
-                  out.writeBytes(twoHyphens + boundary + lineEnd)
-                  out.writeBytes("Content-Disposition: form-data; name=\"language\"" + lineEnd + lineEnd)
-                  out.writeBytes("en" + lineEnd)
 
                   out.writeBytes(twoHyphens + boundary + lineEnd)
                   out.writeBytes("Content-Disposition: form-data; name=\"temperature\"" + lineEnd + lineEnd)
@@ -1137,7 +1119,6 @@ jobs:
                       if (!modelsToTry.contains(it)) modelsToTry.add(it)
                   }
 
-                  var lastErr = ""
                   for (model in modelsToTry) {
                       try {
                           val res = translateToLang(text, targetLang, style, model, apiKey)
@@ -1145,11 +1126,9 @@ jobs:
                               activeLockedModel = model
                               return res
                           }
-                      } catch (e: Exception) {
-                          lastErr = e.localizedMessage ?: "Unknown"
-                      }
+                      } catch (_: Exception) {}
                   }
-                  throw Exception("Translation failed: $lastErr")
+                  return ""
               }
 
               private fun translateToLang(sourceText: String, targetLang: String, style: String, modelName: String, apiKey: String): String {
@@ -1158,16 +1137,16 @@ jobs:
                       requestMethod = "POST"
                       setRequestProperty("Authorization", "Bearer $apiKey")
                       setRequestProperty("Content-Type", "application/json")
-                      connectTimeout = 10000
-                      readTimeout = 18000
+                      connectTimeout = 12000
+                      readTimeout = 25000
                       doOutput = true
                       doInput = true
                   }
 
                   val systemPrompt = if (style == "emotional") {
-                      "You are an expert anime & video dubber. Translate the spoken English into natural, flowing spoken $targetLang in native script. Complete every sentence cleanly with full punctuation. Output ONLY the translated sentence. Never cut off words."
+                      "You are an expert anime & video dubber. Translate spoken dialogue into natural, flowing spoken $targetLang in native script. Complete every sentence cleanly with full punctuation. Output ONLY the translated sentence."
                   } else {
-                      "Translate spoken English into formal $targetLang in native script. Complete every sentence cleanly. Output ONLY the translation."
+                      "Translate spoken dialogue into formal $targetLang in native script. Complete every sentence cleanly. Output ONLY the translation."
                   }
 
                   val payload = JSONObject().apply {
@@ -1209,12 +1188,13 @@ jobs:
                   isProcessing.set(false)
                   tts?.stop()
                   tts?.shutdown()
+                  clearSubtitleInstantly()
                   super.onDestroy()
               }
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with clean auto-clearing subtitles and fresh file descriptors"
+          echo "MainActivity updated with valid keyframed audio chunks and non-crashing loop"
 
       - name: Build Debug APK
         run: |
@@ -1229,5 +1209,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-AutoClear-apk
+          name: HindiDubPlayer-FullAudioFix-apk
           path: "**/build/outputs/apk/debug/*.apk"

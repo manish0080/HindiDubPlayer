@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Fixed Live Dubber
+      - name: Replace MainActivity With Fixed Multipart Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -142,7 +142,7 @@ jobs:
                   videoView.setMediaController(controller)
 
                   videoView.setOnPreparedListener { mp ->
-                      mp.setVolume(0f, 0f) // English audio mute (0%)
+                      mp.setVolume(0f, 0f) // English original muted (0%)
                   }
 
                   button.setOnClickListener {
@@ -177,7 +177,7 @@ jobs:
                       videoView.setVideoURI(uri)
                       videoView.seekTo(1)
 
-                      status.text = "Connecting video stream..."
+                      status.text = "Step 1/3: Reading first audio segment..."
                       isProcessing.set(true)
 
                       Thread {
@@ -220,7 +220,7 @@ jobs:
 
                       extractor.selectTrack(audioTrackIndex)
 
-                      val chunkDurationUs = 8_000_000L // Fast 8-sec chunks
+                      val chunkDurationUs = 8_000_000L // 8 seconds chunk
                       var chunkIndex = 0
                       var hasMoreAudio = true
                       val buffer = ByteBuffer.allocate(1024 * 1024)
@@ -228,10 +228,6 @@ jobs:
 
                       while (hasMoreAudio && isProcessing.get()) {
                           val currentChunkNum = chunkIndex + 1
-                          runOnUiThread {
-                              if (chunkIndex == 0) status.text = "Step 1/3: Reading first audio segment..."
-                          }
-
                           val chunkFile = File(cacheDir, "chunk_$chunkIndex.m4a")
                           if (chunkFile.exists()) chunkFile.delete()
 
@@ -289,22 +285,26 @@ jobs:
                           if (chunkFile.exists() && chunkFile.length() > 500) {
                               try {
                                   runOnUiThread {
-                                      if (chunkIndex == 0) status.text = "Step 2/3: AI Translating speech..."
+                                      status.text = "Step 2/3: Transcribing audio (Part $currentChunkNum)..."
                                   }
 
                                   val englishText = transcribeAudio(chunkFile, groqApiKey)
 
                                   if (englishText.isNotBlank()) {
+                                      runOnUiThread {
+                                          status.text = "Step 3/3: Translating to Hindi..."
+                                      }
+
                                       val hindiText = translateToHindi(englishText, groqApiKey)
 
                                       runOnUiThread {
                                           if (chunkIndex == 0) {
                                               videoView.seekTo(0)
                                               videoView.start()
-                                              status.text = "Live Hindi Dubbing Playing ✓\n\n$hindiText"
+                                              status.text = "Hindi Dubbing Playing ✓\n\n$hindiText"
                                               speakHindi(hindiText, true)
                                           } else {
-                                              status.text = "Live Hindi Dubbing (Part $currentChunkNum) ✓\n\n$hindiText"
+                                              status.text = "Playing (Part $currentChunkNum) ✓\n\n$hindiText"
                                               speakHindi(hindiText, false)
                                           }
                                       }
@@ -336,13 +336,15 @@ jobs:
               }
 
               private fun transcribeAudio(audioFile: File, apiKey: String): String {
-                  val boundary = "===Boundary" + System.currentTimeMillis() + "==="
-                  val CRLF = "\r\n"
+                  val boundary = "Boundary" + System.currentTimeMillis()
+                  val lineEnd = "\r\n"
+                  val twoHyphens = "--"
+
                   val url = URL("https://api.groq.com/openai/v1/audio/transcriptions")
                   val conn = (url.openConnection() as HttpURLConnection).apply {
                       requestMethod = "POST"
-                      setRequestProperty("Authorization", "Bearer $apiKey")
-                      setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                      setRequestProperty("Authorization", "Bearer " + apiKey)
+                      setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary)
                       connectTimeout = 15000
                       readTimeout = 25000
                       doOutput = true
@@ -350,28 +352,32 @@ jobs:
                   }
 
                   val out = DataOutputStream(conn.outputStream)
-                  out.writeBytes("--$boundary$CRLF")
-                  out.writeBytes("Content-Disposition: form-data; name=\"model\"$CRLF$CRLF")
-                  out.writeBytes("whisper-large-v3-turbo$CRLF")
 
-                  out.writeBytes("--$boundary$CRLF")
-                  out.writeBytes("Content-Disposition: form-data; name=\"response_format\"$CRLF$CRLF")
-                  out.writeBytes("json$CRLF")
+                  // model field
+                  out.writeBytes(twoHyphens + boundary + lineEnd)
+                  out.writeBytes("Content-Disposition: form-data; name=\"model\"" + lineEnd + lineEnd)
+                  out.writeBytes("whisper-large-v3-turbo" + lineEnd)
 
-                  out.writeBytes("--$boundary$CRLF")
-                  out.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"${audioFile.name}\"$CRLF")
-                  out.writeBytes("Content-Type: audio/m4a$CRLF$CRLF")
+                  // response_format field
+                  out.writeBytes(twoHyphens + boundary + lineEnd)
+                  out.writeBytes("Content-Disposition: form-data; name=\"response_format\"" + lineEnd + lineEnd)
+                  out.writeBytes("json" + lineEnd)
 
-                  FileInputStream(audioFile).use { fis ->
-                      val buf = ByteArray(4096)
-                      var read: Int
-                      while (fis.read(buf).also { read = it } != -1) {
-                          out.write(buf, 0, read)
-                      }
+                  // file field
+                  out.writeBytes(twoHyphens + boundary + lineEnd)
+                  out.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"" + audioFile.name + "\"" + lineEnd)
+                  out.writeBytes("Content-Type: audio/m4a" + lineEnd + lineEnd)
+
+                  val fis = FileInputStream(audioFile)
+                  val buf = ByteArray(4096)
+                  var bytesRead: Int
+                  while (fis.read(buf).also { bytesRead = it } != -1) {
+                      out.write(buf, 0, bytesRead)
                   }
+                  fis.close()
 
-                  out.writeBytes(CRLF)
-                  out.writeBytes("--$boundary--$CRLF")
+                  out.writeBytes(lineEnd)
+                  out.writeBytes(twoHyphens + boundary + twoHyphens + lineEnd)
                   out.flush()
                   out.close()
 
@@ -389,7 +395,7 @@ jobs:
                   val url = URL("https://api.groq.com/openai/v1/chat/completions")
                   val conn = (url.openConnection() as HttpURLConnection).apply {
                       requestMethod = "POST"
-                      setRequestProperty("Authorization", "Bearer $apiKey")
+                      setRequestProperty("Authorization", "Bearer " + apiKey)
                       setRequestProperty("Content-Type", "application/json")
                       connectTimeout = 15000
                       readTimeout = 25000
@@ -402,7 +408,7 @@ jobs:
                       val messages = JSONArray().apply {
                           put(JSONObject().apply {
                               put("role", "system")
-                              put("content", "You are an expert anime and comic voice dubber. Translate the spoken English dialogue into natural Hindi. Output ONLY the Hindi translation in Devanagari script.")
+                              put("content", "You are an expert anime voice dubber. Translate the spoken English dialogue into natural Hindi. Output ONLY the Hindi translation in Devanagari script. Do not output English.")
                           })
                           put(JSONObject().apply {
                               put("role", "user")
@@ -435,7 +441,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with fixed streaming engine"
+          echo "MainActivity updated with clean boundary multipart"
 
       - name: Build Debug APK
         run: |
@@ -450,5 +456,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-FixedLive-apk
+          name: HindiDubPlayer-WorkingDub-apk
           path: "**/build/outputs/apk/debug/*.apk"

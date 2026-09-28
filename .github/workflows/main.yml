@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Fixed Multipart Dubber
+      - name: Replace MainActivity With Controlled Live Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -57,7 +57,9 @@ jobs:
           package PACKAGE_NAME
 
           import android.app.Activity
+          import android.app.AlertDialog
           import android.content.Intent
+          import android.graphics.Color
           import android.media.AudioManager
           import android.media.MediaCodec
           import android.media.MediaExtractor
@@ -69,10 +71,13 @@ jobs:
           import android.os.ParcelFileDescriptor
           import android.speech.tts.TextToSpeech
           import android.view.Gravity
+          import android.view.View
           import android.widget.Button
+          import android.widget.FrameLayout
           import android.widget.LinearLayout
           import android.widget.MediaController
           import android.widget.TextView
+          import android.widget.Toast
           import android.widget.VideoView
           import org.json.JSONArray
           import org.json.JSONObject
@@ -88,10 +93,16 @@ jobs:
           class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
               private lateinit var videoView: VideoView
-              private lateinit var status: TextView
+              private lateinit var statusText: TextView
+              private lateinit var errorBox: TextView
+              private lateinit var centerStartBtn: Button
+              private var selectedVideoUri: Uri? = null
+
               private var tts: TextToSpeech? = null
               private var pfd: ParcelFileDescriptor? = null
               private val isProcessing = AtomicBoolean(false)
+              private var lastErrorDetails = "No error recorded yet."
+              private var processedSegments = 0
 
               private val groqApiKey = "gsk_BNe4A96j6NLA" + "dcvlcAkAWGdyb3FY" + "itxb1szvztxpo3hH" + "1bQydBza"
 
@@ -101,59 +112,144 @@ jobs:
                   volumeControlStream = AudioManager.STREAM_MUSIC
                   tts = TextToSpeech(this, this)
 
-                  val layout = LinearLayout(this).apply {
+                  val rootLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      gravity = Gravity.CENTER_HORIZONTAL
-                      setPadding(24, 24, 24, 24)
+                      setPadding(16, 16, 16, 16)
                   }
 
-                  val title = TextView(this).apply {
+                  // Top Header with Corner Menu
+                  val headerLayout = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                  }
+
+                  val titleView = TextView(this).apply {
                       text = "Hindi DubPlayer Live"
-                      textSize = 22f
-                      gravity = Gravity.CENTER
+                      textSize = 20f
+                      setTextColor(Color.BLACK)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                   }
-                  layout.addView(title)
+                  headerLayout.addView(titleView)
 
-                  status = TextView(this).apply {
-                      text = "Select any video (Fast Live Dubbing)"
+                  val menuBtn = Button(this).apply {
+                      text = "⚙️ Menu"
+                      textSize = 12f
+                      setOnClickListener { showSettingsDialog() }
+                  }
+                  headerLayout.addView(menuBtn)
+                  rootLayout.addView(headerLayout)
+
+                  // Select Video Button
+                  val selectBtn = Button(this).apply {
+                      text = "📁 Select English Video"
+                      setOnClickListener {
+                          val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                              addCategory(Intent.CATEGORY_OPENABLE)
+                              type = "video/*"
+                          }
+                          startActivityForResult(intent, 100)
+                      }
+                  }
+                  rootLayout.addView(selectBtn)
+
+                  // Status Text
+                  statusText = TextView(this).apply {
+                      text = "Step 1: Select an English video"
                       textSize = 14f
                       gravity = Gravity.CENTER
-                      setPadding(0, 16, 0, 16)
+                      setPadding(0, 8, 0, 8)
                   }
-                  layout.addView(status)
+                  rootLayout.addView(statusText)
 
-                  val button = Button(this).apply {
-                      text = "Select English Video"
+                  // Persistent Error Box (Stays on screen if error happens)
+                  errorBox = TextView(this).apply {
+                      text = ""
+                      textSize = 12f
+                      setTextColor(Color.WHITE)
+                      setBackgroundColor(Color.parseColor("#B00020"))
+                      setPadding(16, 12, 16, 12)
+                      visibility = View.GONE
                   }
-                  layout.addView(button)
+                  rootLayout.addView(errorBox)
+
+                  // Video Container with Center Button
+                  val videoContainer = FrameLayout(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          0,
+                          1f
+                      )
+                  }
 
                   videoView = VideoView(this)
-                  val videoParams = LinearLayout.LayoutParams(
-                      LinearLayout.LayoutParams.MATCH_PARENT,
-                      0
-                  ).apply {
-                      weight = 1f
-                      topMargin = 16
-                  }
-                  layout.addView(videoView, videoParams)
+                  videoContainer.addView(videoView, FrameLayout.LayoutParams(
+                      FrameLayout.LayoutParams.MATCH_PARENT,
+                      FrameLayout.LayoutParams.MATCH_PARENT
+                  ))
 
                   val controller = MediaController(this)
                   controller.setAnchorView(videoView)
                   videoView.setMediaController(controller)
 
                   videoView.setOnPreparedListener { mp ->
-                      mp.setVolume(0f, 0f) // English original muted (0%)
+                      mp.setVolume(0f, 0f) // English volume 0%
                   }
 
-                  button.setOnClickListener {
-                      val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                          addCategory(Intent.CATEGORY_OPENABLE)
-                          type = "video/*"
+                  // Center Translation ON Button
+                  centerStartBtn = Button(this).apply {
+                      text = "▶ START HINDI DUBBING"
+                      textSize = 16f
+                      setTextColor(Color.WHITE)
+                      setBackgroundColor(Color.parseColor("#2E7D32")) // Green
+                      setPadding(24, 16, 24, 16)
+                      visibility = View.GONE
+                      layoutParams = FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.WRAP_CONTENT,
+                          FrameLayout.LayoutParams.WRAP_CONTENT,
+                          Gravity.CENTER
+                      )
+                      setOnClickListener {
+                          val uri = selectedVideoUri ?: return@setOnClickListener
+                          visibility = View.GONE
+                          errorBox.visibility = View.GONE
+                          startDubbingProcess(uri)
                       }
-                      startActivityForResult(intent, 100)
                   }
+                  videoContainer.addView(centerStartBtn)
+                  rootLayout.addView(videoContainer)
 
-                  setContentView(layout)
+                  setContentView(rootLayout)
+              }
+
+              private fun showSettingsDialog() {
+                  val options = arrayOf(
+                      "Dubbing Status ($processedSegments parts done)",
+                      "View Last Error Details",
+                      "Stop Current Dubbing"
+                  )
+                  AlertDialog.Builder(this)
+                      .setTitle("⚙️ DubPlayer Settings")
+                      .setItems(options) { _, which ->
+                          when (which) {
+                              0 -> Toast.makeText(this, "Processed: $processedSegments chunks", Toast.LENGTH_SHORT).show()
+                              1 -> {
+                                  AlertDialog.Builder(this)
+                                      .setTitle("Last Error Info")
+                                      .setMessage(lastErrorDetails)
+                                      .setPositiveButton("OK", null)
+                                      .show()
+                              }
+                              2 -> {
+                                  isProcessing.set(false)
+                                  tts?.stop()
+                                  videoView.pause()
+                                  statusText.text = "Dubbing Stopped."
+                                  centerStartBtn.visibility = View.VISIBLE
+                              }
+                          }
+                      }
+                      .setNegativeButton("Close", null)
+                      .show()
               }
 
               override fun onInit(initStatus: Int) {
@@ -170,20 +266,28 @@ jobs:
 
                   if (requestCode == 100 && resultCode == RESULT_OK) {
                       val uri = data?.data ?: return
+                      selectedVideoUri = uri
 
                       isProcessing.set(false)
                       tts?.stop()
+                      errorBox.visibility = View.GONE
 
                       videoView.setVideoURI(uri)
-                      videoView.seekTo(1)
+                      videoView.seekTo(1) // Show first frame
 
-                      status.text = "Step 1/3: Reading first audio segment..."
-                      isProcessing.set(true)
-
-                      Thread {
-                          startLiveStreamingPipeline(uri)
-                      }.start()
+                      statusText.text = "Video loaded! Tap 'START HINDI DUBBING' to begin."
+                      centerStartBtn.visibility = View.VISIBLE
                   }
+              }
+
+              private fun startDubbingProcess(uri: Uri) {
+                  isProcessing.set(true)
+                  processedSegments = 0
+                  statusText.text = "Initializing Live Dubbing..."
+
+                  Thread {
+                      startLiveStreamingPipeline(uri)
+                  }.start()
               }
 
               private fun startLiveStreamingPipeline(uri: Uri) {
@@ -193,7 +297,7 @@ jobs:
                       pfd = contentResolver.openFileDescriptor(uri, "r")
                       val descriptor = pfd?.fileDescriptor
                       if (descriptor == null) {
-                          runOnUiThread { status.text = "Cannot access video file" }
+                          showError("Cannot access video file stream")
                           return
                       }
 
@@ -213,20 +317,33 @@ jobs:
                       }
 
                       if (audioTrackIndex < 0 || audioFormat == null) {
-                          runOnUiThread { status.text = "No audio track found in video!" }
+                          showError("No audio track detected in this video!")
                           extractor.release()
                           return
                       }
 
                       extractor.selectTrack(audioTrackIndex)
 
-                      val chunkDurationUs = 8_000_000L // 8 seconds chunk
+                      val chunkDurationUs = 10_000_000L // 10-sec chunk
                       var chunkIndex = 0
                       var hasMoreAudio = true
                       val buffer = ByteBuffer.allocate(1024 * 1024)
                       val bufferInfo = MediaCodec.BufferInfo()
 
                       while (hasMoreAudio && isProcessing.get()) {
+
+                          // PACING: Wait for video playback so we don't spam Groq API
+                          if (chunkIndex > 1) {
+                              while (isProcessing.get() && videoView.isPlaying) {
+                                  val currentPosMs = videoView.currentPosition
+                                  val chunkStartMs = (chunkIndex - 1) * 10_000L
+                                  if (currentPosMs >= chunkStartMs) {
+                                      break
+                                  }
+                                  Thread.sleep(400)
+                              }
+                          }
+
                           val currentChunkNum = chunkIndex + 1
                           val chunkFile = File(cacheDir, "chunk_$chunkIndex.m4a")
                           if (chunkFile.exists()) chunkFile.delete()
@@ -236,7 +353,7 @@ jobs:
                           muxer.start()
 
                           var chunkStartPts = -1L
-                          var lastPts = -1L
+                          var lastPts = 0L
                           var samplesWritten = 0
 
                           while (isProcessing.get()) {
@@ -250,19 +367,19 @@ jobs:
                               val rawPts = extractor.sampleTime
                               if (chunkStartPts == -1L) chunkStartPts = rawPts
 
-                              var currentChunkPts = rawPts - chunkStartPts
-                              if (currentChunkPts <= lastPts) {
-                                  currentChunkPts = lastPts + 1000L
+                              var relativePts = rawPts - chunkStartPts
+                              if (relativePts <= lastPts) {
+                                  relativePts = lastPts + 20_000L
                               }
-                              lastPts = currentChunkPts
+                              lastPts = relativePts
 
-                              if (currentChunkPts >= chunkDurationUs) {
+                              if (relativePts >= chunkDurationUs) {
                                   break
                               }
 
                               bufferInfo.offset = 0
                               bufferInfo.size = sampleSize
-                              bufferInfo.presentationTimeUs = currentChunkPts
+                              bufferInfo.presentationTimeUs = relativePts
                               bufferInfo.flags = extractor.sampleFlags
 
                               buffer.position(0)
@@ -274,9 +391,7 @@ jobs:
                           }
 
                           try {
-                              if (samplesWritten > 0) {
-                                  muxer.stop()
-                              }
+                              if (samplesWritten > 0) muxer.stop()
                               muxer.release()
                           } catch (e: Exception) {
                               e.printStackTrace()
@@ -285,32 +400,43 @@ jobs:
                           if (chunkFile.exists() && chunkFile.length() > 500) {
                               try {
                                   runOnUiThread {
-                                      status.text = "Step 2/3: Transcribing audio (Part $currentChunkNum)..."
+                                      statusText.text = "Step 2/3: Transcribing audio (Part $currentChunkNum)..."
                                   }
 
                                   val englishText = transcribeAudio(chunkFile, groqApiKey)
 
                                   if (englishText.isNotBlank()) {
                                       runOnUiThread {
-                                          status.text = "Step 3/3: Translating to Hindi..."
+                                          statusText.text = "Step 3/3: Translating to Hindi (Part $currentChunkNum)..."
                                       }
 
                                       val hindiText = translateToHindi(englishText, groqApiKey)
 
                                       runOnUiThread {
+                                          processedSegments++
                                           if (chunkIndex == 0) {
                                               videoView.seekTo(0)
                                               videoView.start()
-                                              status.text = "Hindi Dubbing Playing ✓\n\n$hindiText"
+                                              statusText.text = "Hindi Dubbing Active ✓\n\n$hindiText"
                                               speakHindi(hindiText, true)
                                           } else {
-                                              status.text = "Playing (Part $currentChunkNum) ✓\n\n$hindiText"
+                                              statusText.text = "Hindi Dubbing (Part $currentChunkNum) ✓\n\n$hindiText"
                                               speakHindi(hindiText, false)
+                                          }
+                                      }
+                                  } else {
+                                      if (chunkIndex == 0) {
+                                          runOnUiThread {
+                                              videoView.seekTo(0)
+                                              videoView.start()
+                                              statusText.text = "Playing video (Listening for dialogues...)"
                                           }
                                       }
                                   }
                               } catch (e: Exception) {
-                                  runOnUiThread { status.text = "Error: ${e.localizedMessage}" }
+                                  showError("Part $currentChunkNum Error: ${e.localizedMessage}")
+                                  isProcessing.set(false)
+                                  break
                               } finally {
                                   chunkFile.delete()
                               }
@@ -322,8 +448,18 @@ jobs:
                       extractor.release()
 
                   } catch (e: Exception) {
-                      runOnUiThread { status.text = "Error: ${e.localizedMessage}" }
+                      showError("Playback Error: ${e.localizedMessage}")
                       try { extractor.release() } catch (_: Exception) {}
+                  }
+              }
+
+              private fun showError(msg: String) {
+                  lastErrorDetails = msg
+                  runOnUiThread {
+                      errorBox.text = "⚠️ $msg\n(Tap ⚙️ Menu to view details)"
+                      errorBox.visibility = View.VISIBLE
+                      statusText.text = "Dubbing Paused on Error"
+                      centerStartBtn.visibility = View.VISIBLE
                   }
               }
 
@@ -345,36 +481,33 @@ jobs:
                       requestMethod = "POST"
                       setRequestProperty("Authorization", "Bearer " + apiKey)
                       setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary)
-                      connectTimeout = 15000
-                      readTimeout = 25000
+                      connectTimeout = 12000
+                      readTimeout = 20000
                       doOutput = true
                       doInput = true
                   }
 
                   val out = DataOutputStream(conn.outputStream)
 
-                  // model field
                   out.writeBytes(twoHyphens + boundary + lineEnd)
                   out.writeBytes("Content-Disposition: form-data; name=\"model\"" + lineEnd + lineEnd)
                   out.writeBytes("whisper-large-v3-turbo" + lineEnd)
 
-                  // response_format field
                   out.writeBytes(twoHyphens + boundary + lineEnd)
                   out.writeBytes("Content-Disposition: form-data; name=\"response_format\"" + lineEnd + lineEnd)
                   out.writeBytes("json" + lineEnd)
 
-                  // file field
                   out.writeBytes(twoHyphens + boundary + lineEnd)
                   out.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"" + audioFile.name + "\"" + lineEnd)
                   out.writeBytes("Content-Type: audio/m4a" + lineEnd + lineEnd)
 
-                  val fis = FileInputStream(audioFile)
-                  val buf = ByteArray(4096)
-                  var bytesRead: Int
-                  while (fis.read(buf).also { bytesRead = it } != -1) {
-                      out.write(buf, 0, bytesRead)
+                  FileInputStream(audioFile).use { fis ->
+                      val buf = ByteArray(4096)
+                      var bytesRead: Int
+                      while (fis.read(buf).also { bytesRead = it } != -1) {
+                          out.write(buf, 0, bytesRead)
+                      }
                   }
-                  fis.close()
 
                   out.writeBytes(lineEnd)
                   out.writeBytes(twoHyphens + boundary + twoHyphens + lineEnd)
@@ -384,7 +517,7 @@ jobs:
                   val code = conn.responseCode
                   if (code == 200) {
                       val res = conn.inputStream.bufferedReader().use { it.readText() }
-                      return JSONObject(res).optString("text", "")
+                      return JSONObject(res).optString("text", "").trim()
                   } else {
                       val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $code"
                       throw Exception("Whisper: $err")
@@ -397,18 +530,19 @@ jobs:
                       requestMethod = "POST"
                       setRequestProperty("Authorization", "Bearer " + apiKey)
                       setRequestProperty("Content-Type", "application/json")
-                      connectTimeout = 15000
-                      readTimeout = 25000
+                      connectTimeout = 12000
+                      readTimeout = 20000
                       doOutput = true
                       doInput = true
                   }
 
+                  // Lightweight & Fast model to avoid Rate-Limits
                   val payload = JSONObject().apply {
-                      put("model", "llama-3.3-70b-versatile")
+                      put("model", "llama-3.1-8b-instant")
                       val messages = JSONArray().apply {
                           put(JSONObject().apply {
                               put("role", "system")
-                              put("content", "You are an expert anime voice dubber. Translate the spoken English dialogue into natural Hindi. Output ONLY the Hindi translation in Devanagari script. Do not output English.")
+                              put("content", "You are an expert anime & video dubber. Translate the given spoken English into natural Hindi. Return ONLY the Hindi translation in Devanagari script. Do not output English words or explanations.")
                           })
                           put(JSONObject().apply {
                               put("role", "user")
@@ -416,7 +550,7 @@ jobs:
                           })
                       }
                       put("messages", messages)
-                      put("temperature", 0.3)
+                      put("temperature", 0.2)
                   }
 
                   conn.outputStream.use { it.write(payload.toString().toByteArray()) }
@@ -424,7 +558,7 @@ jobs:
                   val code = conn.responseCode
                   if (code == 200) {
                       val res = conn.inputStream.bufferedReader().use { it.readText() }
-                      return JSONObject(res).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content")
+                      return JSONObject(res).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
                   } else {
                       val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $code"
                       throw Exception("Llama: $err")
@@ -441,7 +575,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with clean boundary multipart"
+          echo "MainActivity updated with controlled dubbing engine"
 
       - name: Build Debug APK
         run: |
@@ -456,5 +590,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-WorkingDub-apk
+          name: HindiDubPlayer-Controlled-apk
           path: "**/build/outputs/apk/debug/*.apk"

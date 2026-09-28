@@ -47,7 +47,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Background Audio Fed Live Dubber
+      - name: Replace MainActivity With Clean Error-Free Engine
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -82,13 +82,11 @@ jobs:
           import android.os.Bundle
           import android.os.Handler
           import android.os.Looper
-          import android.os.ParcelFileDescriptor
           import android.speech.tts.TextToSpeech
           import android.speech.tts.UtteranceProgressListener
           import android.text.TextUtils
           import android.view.Gravity
           import android.view.View
-          import android.view.ViewGroup
           import android.view.WindowManager
           import android.webkit.JavascriptInterface
           import android.webkit.WebChromeClient
@@ -620,7 +618,6 @@ jobs:
                               1 -> {
                                   isYoutubePlaying.set(true)
                                   statusBadge.text = "▶ YouTube Playing (Live Dubbing Active)"
-                                  // KEEP YOUTUBE RUNNING SILENTLY IN BACKGROUND SO CAPTIONS/AUDIO ARE FED TO PIPELINE
                                   webViewPlayer.evaluateJavascript("if(player && player.unMute){ player.unMute(); player.setVolume(1); player.playVideo(); }", null)
                               }
                               2 -> {
@@ -697,7 +694,6 @@ jobs:
                   originalContentView.text = "Loading YouTube captions..."
                   translatedContentView.text = "Preparing live character dubbing..."
 
-                  // YOUTUBE AUDIO SET TO 1% (BARELY AUDIBLE BACKGROUND FEED FOR TIMELINE SYNC)
                   val html = """
                       <!DOCTYPE html>
                       <html>
@@ -730,7 +726,7 @@ jobs:
                                 'onReady': function(e) {
                                   try {
                                     e.target.unMute();
-                                    e.target.setVolume(1); // 1% volume so pipeline has active audio stream feed
+                                    e.target.setVolume(1);
                                     e.target.playVideo();
                                   } catch(err) {}
                                   setInterval(function() {
@@ -1701,7 +1697,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully updated with silent background audio feed for YouTube live dubbing"
+          echo "MainActivity successfully updated with preserved local engine and 1% volume YouTube feed"
 
       - name: Build Debug APK
         run: |

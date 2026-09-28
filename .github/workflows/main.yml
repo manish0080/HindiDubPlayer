@@ -47,7 +47,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Overwrite MainActivity with Clean Stable Engine
+      - name: Overwrite MainActivity with VLC-Style Fullscreen & Local Player
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -88,17 +88,10 @@ jobs:
           import android.os.Looper
           import android.speech.tts.TextToSpeech
           import android.speech.tts.UtteranceProgressListener
-          import android.text.TextUtils
           import android.view.Gravity
           import android.view.View
           import android.view.WindowManager
-          import android.webkit.JavascriptInterface
-          import android.webkit.WebChromeClient
-          import android.webkit.WebSettings
-          import android.webkit.WebView
-          import android.webkit.WebViewClient
           import android.widget.Button
-          import android.widget.EditText
           import android.widget.FrameLayout
           import android.widget.HorizontalScrollView
           import android.widget.LinearLayout
@@ -119,7 +112,6 @@ jobs:
           import java.util.concurrent.ConcurrentLinkedQueue
           import java.util.concurrent.atomic.AtomicBoolean
           import java.util.concurrent.atomic.AtomicLong
-          import java.util.regex.Pattern
 
           data class TimestampDubSegment(
               val startMs: Long,
@@ -134,7 +126,6 @@ jobs:
 
               private lateinit var videoContainer: FrameLayout
               private lateinit var videoView: VideoView
-              private lateinit var webViewPlayer: WebView
               private lateinit var mainScrollView: ScrollView
               private lateinit var centerStartBtn: Button
               private lateinit var fullscreenBtn: Button
@@ -154,11 +145,6 @@ jobs:
               private lateinit var stylePillBtn: Button
 
               private var selectedVideoUri: Uri? = null
-              private var currentYoutubeVideoId: String? = null
-              private var isYoutubeMode = false
-              private val currentYoutubeTimeMs = AtomicLong(0L)
-              private val isYoutubePlaying = AtomicBoolean(false)
-              private var lastYoutubeSeekCheckSec = 0.0
 
               private var tts: TextToSpeech? = null
               private var mediaPlayerRef: MediaPlayer? = null
@@ -229,7 +215,6 @@ jobs:
                   return (v * resources.displayMetrics.density).toInt()
               }
 
-              @SuppressLint("SetJavaScriptEnabled")
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
@@ -274,26 +259,6 @@ jobs:
                       )
                   }
                   videoContainer.addView(videoView)
-
-                  webViewPlayer = WebView(this).apply {
-                      layoutParams = FrameLayout.LayoutParams(
-                          FrameLayout.LayoutParams.MATCH_PARENT,
-                          FrameLayout.LayoutParams.MATCH_PARENT
-                      )
-                      visibility = View.GONE
-                      settings.apply {
-                          javaScriptEnabled = true
-                          mediaPlaybackRequiresUserGesture = false
-                          domStorageEnabled = true
-                          useWideViewPort = true
-                          loadWithOverviewMode = true
-                          userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
-                      }
-                      webChromeClient = WebChromeClient()
-                      webViewClient = WebViewClient()
-                      addJavascriptInterface(YouTubeBridge(), "AndroidBridge")
-                  }
-                  videoContainer.addView(webViewPlayer)
 
                   fullscreenSubtitleView = TextView(this).apply {
                       textSize = 15f
@@ -352,26 +317,12 @@ jobs:
                       gravity = Gravity.CENTER_VERTICAL
                   }
 
-                  val ytBtn = Button(this).apply {
-                      text = "🔗 YouTube"
-                      textSize = 11.5f
-                      setTextColor(Color.WHITE)
-                      background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#CC0000")); cornerRadius = dp(8).toFloat() }
-                      setPadding(dp(12), dp(6), dp(12), dp(6))
-                      setOnClickListener { showYouTubeInputDialog() }
-                  }
-                  actionRow.addView(ytBtn)
-
                   val openVideoBtn = Button(this).apply {
-                      text = "📁 Local"
-                      textSize = 11.5f
+                      text = "📁 Open Video"
+                      textSize = 12f
                       setTextColor(Color.WHITE)
                       background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#37474F")); cornerRadius = dp(8).toFloat() }
-                      setPadding(dp(12), dp(6), dp(12), dp(6))
-                      val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          marginStart = dp(6)
-                      }
-                      layoutParams = params
+                      setPadding(dp(14), dp(8), dp(14), dp(8))
                       setOnClickListener { openVideoPicker() }
                   }
                   actionRow.addView(openVideoBtn)
@@ -385,13 +336,9 @@ jobs:
                       background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#ECEFF1")); cornerRadius = dp(8).toFloat() }
                       setTextColor(Color.parseColor("#37474F"))
                       setOnClickListener {
-                          if (isYoutubeMode) {
-                              seekYouTubeRelative(-10)
-                          } else {
-                              val newPos = (videoView.currentPosition - 10000).coerceAtLeast(0)
-                              handleSeekTo(newPos.toLong())
-                              videoView.seekTo(newPos)
-                          }
+                          val newPos = (videoView.currentPosition - 10000).coerceAtLeast(0)
+                          handleSeekTo(newPos.toLong())
+                          videoView.seekTo(newPos)
                       }
                   }
                   actionRow.addView(rewBtn)
@@ -416,13 +363,9 @@ jobs:
                       background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(Color.parseColor("#ECEFF1")); cornerRadius = dp(8).toFloat() }
                       setTextColor(Color.parseColor("#37474F"))
                       setOnClickListener {
-                          if (isYoutubeMode) {
-                              seekYouTubeRelative(10)
-                          } else {
-                              val newPos = (videoView.currentPosition + 10000).coerceAtMost(videoView.duration)
-                              handleSeekTo(newPos.toLong())
-                              videoView.seekTo(newPos)
-                          }
+                          val newPos = (videoView.currentPosition + 10000).coerceAtMost(videoView.duration)
+                          handleSeekTo(newPos.toLong())
+                          videoView.seekTo(newPos)
                       }
                   }
                   actionRow.addView(fwdBtn)
@@ -484,7 +427,7 @@ jobs:
                   }
 
                   statusBadge = TextView(this).apply {
-                      text = "Ready to play local video or YouTube"
+                      text = "Ready. Please select a local video."
                       textSize = 11f
                       setTextColor(Color.parseColor("#455A64"))
                       setTypeface(null, Typeface.BOLD)
@@ -589,7 +532,6 @@ jobs:
                       }
                   }
 
-                  handleIncomingShareIntent(intent)
                   startTimestampConsumerLoop()
               }
 
@@ -605,425 +547,19 @@ jobs:
                   }
               }
 
-              override fun onNewIntent(intent: Intent?) {
-                  super.onNewIntent(intent)
-                  intent?.let { handleIncomingShareIntent(it) }
-              }
-
-              private fun handleIncomingShareIntent(intent: Intent) {
-                  if (Intent.ACTION_SEND == intent.action && intent.type == "text/plain") {
-                      val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
-                      val extractedId = extractCleanYouTubeId(sharedText)
-                      if (!extractedId.isNullOrEmpty()) {
-                          loadYouTubeVideo(extractedId)
-                      }
-                  }
-              }
-
-              inner class YouTubeBridge {
-                  @JavascriptInterface
-                  fun onTimeUpdate(timeSec: Double) {
-                      val timeMs = (timeSec * 1000.0).toLong()
-                      if (Math.abs(timeSec - lastYoutubeSeekCheckSec) > 2.0) {
-                          handleSeekTo(timeMs)
-                      }
-                      lastYoutubeSeekCheckSec = timeSec
-                      currentYoutubeTimeMs.set(timeMs)
-                  }
-
-                  @JavascriptInterface
-                  fun onStateChange(state: Int) {
-                      runOnUiThread {
-                          when (state) {
-                              1 -> {
-                                  isYoutubePlaying.set(true)
-                                  statusBadge.text = "▶ YouTube Playing (Live Dubbing Active)"
-                                  webViewPlayer.evaluateJavascript("if(player && player.unMute){ player.unMute(); player.setVolume(1); player.playVideo(); }", null)
-                              }
-                              2 -> {
-                                  isYoutubePlaying.set(false)
-                                  statusBadge.text = "⏸ YouTube Paused"
-                                  tts?.stop()
-                                  isSpeechActive.set(false)
-                              }
-                              3 -> statusBadge.text = "⏳ Buffering YouTube..."
-                          }
-                      }
-                  }
-              }
-
-              private fun showYouTubeInputDialog() {
-                  val input = EditText(this).apply {
-                      hint = "Paste YouTube link (e.g. youtu.be/...)"
-                      setSingleLine()
-                  }
-                  AlertDialog.Builder(this)
-                      .setTitle("🔗 YouTube Live Dubbing")
-                      .setMessage("Paste any YouTube Video or Shorts URL to live dub:")
-                      .setView(input)
-                      .setPositiveButton("Dub Now") { _, _ ->
-                          val text = input.text.toString().trim()
-                          val id = extractCleanYouTubeId(text)
-                          if (!id.isNullOrEmpty()) {
-                              loadYouTubeVideo(id)
-                          } else {
-                              Toast.makeText(this, "Invalid YouTube URL", Toast.LENGTH_SHORT).show()
-                          }
-                      }
-                      .setNegativeButton("Cancel", null)
-                      .show()
-              }
-
-              private fun extractCleanYouTubeId(rawUrl: String): String? {
-                  val trimmed = rawUrl.trim()
-                  val patterns = arrayOf(
-                      "youtu\\.be\\/([a-zA-Z0-9_-]{11})",
-                      "v=([a-zA-Z0-9_-]{11})",
-                      "embed\\/([a-zA-Z0-9_-]{11})",
-                      "shorts\\/([a-zA-Z0-9_-]{11})"
-                  )
-                  for (pat in patterns) {
-                      val m = Pattern.compile(pat).matcher(trimmed)
-                      if (m.find()) {
-                          return m.group(1)
-                      }
-                  }
-                  if (trimmed.length == 11 && trimmed.matches(Regex("^[a-zA-Z0-9_-]{11}$"))) {
-                      return trimmed
-                  }
-                  return null
-              }
-
-              private fun loadYouTubeVideo(videoId: String) {
-                  currentYoutubeVideoId = videoId
-                  isYoutubeMode = true
-
-                  videoView.visibility = View.GONE
-                  webViewPlayer.visibility = View.VISIBLE
-                  centerStartBtn.visibility = View.GONE
-
-                  timelineDubQueue.clear()
-                  sessionCacheMap.clear()
-                  currentlyPlayingSegment = null
-                  tts?.stop()
-                  isSpeechActive.set(false)
-                  currentYoutubeTimeMs.set(0L)
-                  lastYoutubeSeekCheckSec = 0.0
-
-                  statusBadge.text = "Connecting to YouTube stream..."
-                  originalContentView.text = "Loading YouTube captions..."
-                  translatedContentView.text = "Preparing live character dubbing..."
-
-                  val html = """
-                      <!DOCTYPE html>
-                      <html>
-                      <head>
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                        <meta name="referrer" content="strict-origin-when-cross-origin">
-                        <style>
-                          body, html { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; }
-                          iframe { width:100%; height:100%; border:none; }
-                        </style>
-                      </head>
-                      <body>
-                        <iframe id="player"
-                          src="https://www.youtube-nocookie.com/embed/$videoId?enablejsapi=1&autoplay=1&playsinline=1&controls=1&rel=0&origin=https://www.youtube-nocookie.com"
-                          frameborder="0"
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                          allowfullscreen
-                          referrerpolicy="strict-origin-when-cross-origin">
-                        </iframe>
-                        <script>
-                          var player;
-                          var tag = document.createElement('script');
-                          tag.src = "https://www.youtube.com/iframe_api";
-                          var firstScriptTag = document.getElementsByTagName('script')[0];
-                          firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-
-                          function onYouTubeIframeAPIReady() {
-                            player = new YT.Player('player', {
-                              events: {
-                                'onReady': function(e) {
-                                  try {
-                                    e.target.unMute();
-                                    e.target.setVolume(1);
-                                    e.target.playVideo();
-                                  } catch(err) {}
-                                  setInterval(function() {
-                                    try {
-                                      if (player && typeof player.getCurrentTime === 'function') {
-                                        var t = player.getCurrentTime();
-                                        if (typeof t === 'number' && !isNaN(t)) {
-                                          AndroidBridge.onTimeUpdate(t);
-                                        }
-                                      }
-                                    } catch(err) {}
-                                  }, 80);
-                                },
-                                'onStateChange': function(e) {
-                                  try {
-                                    if (typeof e.data === 'number') {
-                                      AndroidBridge.onStateChange(e.data);
-                                    }
-                                  } catch(err) {}
-                                }
-                              }
-                            });
-                          }
-                        </script>
-                      </body>
-                      </html>
-                  """.trimIndent()
-
-                  webViewPlayer.loadDataWithBaseURL("https://www.youtube-nocookie.com", html, "text/html", "UTF-8", null)
-
-                  isProcessing.set(true)
-                  Thread {
-                      runYouTubeLiveCaptionPipeline(videoId)
-                  }.start()
-              }
-
-              private fun seekYouTubeRelative(seconds: Int) {
-                  webViewPlayer.evaluateJavascript("if (player && player.getCurrentTime) { player.seekTo(player.getCurrentTime() + ($seconds), true); }", null)
-              }
-
               private fun togglePlayPause() {
-                  if (isYoutubeMode) {
-                      webViewPlayer.evaluateJavascript("if (player) { if (player.getPlayerState() === 1) { player.pauseVideo(); } else { player.playVideo(); } }", null)
+                  if (videoView.isPlaying) {
+                      videoView.pause()
+                      tts?.stop()
+                      isSpeechActive.set(false)
+                      saveCurrentPosition()
+                      statusBadge.text = "Paused"
                   } else {
-                      if (videoView.isPlaying) {
-                          videoView.pause()
-                          tts?.stop()
-                          isSpeechActive.set(false)
-                          saveCurrentPosition()
-                          statusBadge.text = "Paused"
-                      } else {
-                          mediaPlayerRef?.setVolume(0f, 0f)
-                          applyVideoPlaybackSpeed()
-                          videoView.start()
-                          statusBadge.text = "Playing"
-                      }
+                      mediaPlayerRef?.setVolume(0f, 0f)
+                      applyVideoPlaybackSpeed()
+                      videoView.start()
+                      statusBadge.text = "Playing"
                   }
-              }
-
-              private fun runYouTubeLiveCaptionPipeline(videoId: String) {
-                  populateAccountModels(groqApiKey)
-
-                  val allSentences = mutableListOf<TimestampDubSegment>()
-
-                  val instances = arrayOf("https://pipedapi.kavin.rocks", "https://api.invidious.io", "https://yt.artemislena.eu")
-                  for (inst in instances) {
-                      if (allSentences.isNotEmpty()) break
-                      try {
-                          val subUrl = "$inst/subtitles/$videoId"
-                          val conn = (URL(subUrl).openConnection() as HttpURLConnection).apply {
-                              connectTimeout = 6000
-                              readTimeout = 7000
-                              setRequestProperty("User-Agent", "Mozilla/5.0")
-                          }
-                          if (conn.responseCode == 200) {
-                              val json = conn.inputStream.bufferedReader().use { it.readText() }
-                              val arr = JSONArray(json)
-                              var trackUrl = ""
-                              for (i in 0 until arr.length()) {
-                                  val item = arr.getJSONObject(i)
-                                  val code = item.optString("code", "")
-                                  if (code.startsWith("en") || code.startsWith("auto")) {
-                                      trackUrl = item.optString("url", "")
-                                      break
-                                  }
-                              }
-                              if (trackUrl.isNotEmpty()) {
-                                  val tConn = (URL(trackUrl).openConnection() as HttpURLConnection)
-                                  val vtt = tConn.inputStream.bufferedReader().use { it.readText() }
-                                  parseVttSubtitles(vtt, allSentences)
-                              }
-                          }
-                      } catch (_: Exception) {}
-                  }
-
-                  if (allSentences.isEmpty()) {
-                      try {
-                          val directUrl = "https://www.youtube.com/api/timedtext?v=$videoId&lang=en&fmt=json3"
-                          val conn = (URL(directUrl).openConnection() as HttpURLConnection).apply {
-                              setRequestProperty("User-Agent", "Mozilla/5.0")
-                              connectTimeout = 6000
-                              readTimeout = 7000
-                          }
-                          if (conn.responseCode == 200) {
-                              val res = conn.inputStream.bufferedReader().use { it.readText() }
-                              parseJson3Subtitles(res, allSentences)
-                          }
-                      } catch (_: Exception) {}
-                  }
-
-                  if (allSentences.isEmpty()) {
-                      runOnUiThread {
-                          statusBadge.text = "⚠️ No captions found for this YouTube video."
-                          originalContentView.text = "This YouTube video has no subtitles."
-                          translatedContentView.text = "Try another YouTube link or use '📁 Local'."
-                      }
-                      return
-                  }
-
-                  runOnUiThread {
-                      statusBadge.text = "Captions Loaded (${allSentences.size} lines). Live Dubbing Active!"
-                  }
-
-                  var currentIndex = 0
-                  while (isProcessing.get() && currentIndex < allSentences.size) {
-                      val batch = mutableListOf<TimestampDubSegment>()
-                      while (batch.size < 5 && currentIndex < allSentences.size) {
-                          batch.add(allSentences[currentIndex])
-                          currentIndex++
-                      }
-
-                      val texts = batch.map { it.originalText }
-                      val translatedObjs = batchTranslateDialoguesForYouTube(texts, targetLangName, dubStyleKey, groqApiKey)
-
-                      for (k in batch.indices) {
-                          val seg = batch[k]
-                          val transObj = if (k < translatedObjs.size) translatedObjs[k] else ("" to "man")
-                          val cleaned = cleanTextForDubbing(transObj.first, targetLangCode)
-                          val speaker = transObj.second
-
-                          if (cleaned.isNotBlank()) {
-                              val newSeg = TimestampDubSegment(seg.startMs, seg.endMs, seg.originalText, cleaned, speaker)
-                              sessionCacheMap[seg.startMs] = newSeg
-                              timelineDubQueue.add(newSeg)
-                          }
-                      }
-
-                      Thread.sleep(1000)
-                  }
-              }
-
-              private fun parseVttSubtitles(vtt: String, outList: MutableList<TimestampDubSegment>) {
-                  val lines = vtt.split("\n")
-                  var startMs = -1L
-                  var endMs = -1L
-                  for (line in lines) {
-                      val trimmed = line.trim()
-                      if (trimmed.contains("-->")) {
-                          val parts = trimmed.split("-->")
-                          if (parts.size == 2) {
-                              startMs = parseTimestampToMs(parts[0].trim())
-                              endMs = parseTimestampToMs(parts[1].trim())
-                          }
-                      } else if (startMs != -1L && endMs != -1L && trimmed.isNotEmpty() && !trimmed.matches(Regex("^[0-9]+$"))) {
-                          val text = cleanHtmlEntities(trimmed)
-                          if (isRealSpeech(text)) {
-                              outList.add(TimestampDubSegment(startMs, endMs, text, ""))
-                          }
-                          startMs = -1L
-                          endMs = -1L
-                      }
-                  }
-              }
-
-              private fun parseJson3Subtitles(jsonStr: String, outList: MutableList<TimestampDubSegment>) {
-                  val root = JSONObject(jsonStr)
-                  val events = root.optJSONArray("events") ?: return
-                  for (i in 0 until events.length()) {
-                      val ev = events.getJSONObject(i)
-                      val startMs = ev.optLong("tStartMs", -1L)
-                      val durMs = ev.optLong("dDurationMs", 0L)
-                      val segs = ev.optJSONArray("segs")
-                      if (startMs >= 0 && segs != null) {
-                          val sb = StringBuilder()
-                          for (j in 0 until segs.length()) {
-                              sb.append(segs.getJSONObject(j).optString("utf8", ""))
-                          }
-                          val text = cleanHtmlEntities(sb.toString().replace("\n", " ").trim())
-                          if (isRealSpeech(text)) {
-                              outList.add(TimestampDubSegment(startMs, startMs + durMs, text, ""))
-                          }
-                      }
-                  }
-              }
-
-              private fun parseTimestampToMs(stamp: String): Long {
-                  val parts = stamp.split(":")
-                  return try {
-                      if (parts.size == 3) {
-                          val h = parts[0].toLong()
-                          val m = parts[1].toLong()
-                          val sParts = parts[2].split(".")
-                          val s = sParts[0].toLong()
-                          val ms = if (sParts.size > 1) sParts[1].padEnd(3, '0').substring(0, 3).toLong() else 0L
-                          (h * 3600 + m * 60 + s) * 1000 + ms
-                      } else if (parts.size == 2) {
-                          val m = parts[0].toLong()
-                          val sParts = parts[1].split(".")
-                          val s = sParts[0].toLong()
-                          val ms = if (sParts.size > 1) sParts[1].padEnd(3, '0').substring(0, 3).toLong() else 0L
-                          (m * 60 + s) * 1000 + ms
-                      } else 0L
-                  } catch (_: Exception) { 0L }
-              }
-
-              private fun batchTranslateDialoguesForYouTube(texts: List<String>, targetLang: String, style: String, apiKey: String): List<Pair<String, String>> {
-                  if (texts.isEmpty()) return emptyList()
-                  val jsonInput = JSONArray()
-                  texts.forEach { jsonInput.put(it) }
-
-                  val prompt = "Translate this JSON array of dialogue strings into expressive spoken $targetLang in native script. Also classify the speaker into: 'man', 'woman', 'boy', or 'girl'. Output ONLY a valid JSON array of objects: [{\"text\": \"अनुवाद\", \"speaker\": \"woman\"}]."
-
-                  val model = activeLockedModel ?: "llama-3.1-8b-instant"
-                  try {
-                      val url = URL("https://api.groq.com/openai/v1/chat/completions")
-                      val conn = (url.openConnection() as HttpURLConnection).apply {
-                          requestMethod = "POST"
-                          setRequestProperty("Authorization", "Bearer $apiKey")
-                          setRequestProperty("Content-Type", "application/json")
-                          connectTimeout = 8000
-                          readTimeout = 15000
-                          doOutput = true
-                          doInput = true
-                      }
-
-                      val payload = JSONObject().apply {
-                          put("model", model)
-                          val messages = JSONArray().apply {
-                              put(JSONObject().apply { put("role", "system"); put("content", prompt) })
-                              put(JSONObject().apply { put("role", "user"); put("content", jsonInput.toString()) })
-                          }
-                          put("messages", messages)
-                          put("temperature", 0.1)
-                      }
-
-                      conn.outputStream.use { it.write(payload.toString().toByteArray()) }
-
-                      if (conn.responseCode == 200) {
-                          val res = conn.inputStream.bufferedReader().use { it.readText() }
-                          val rawContent = JSONObject(res).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
-                          val cleanJson = if (rawContent.contains("[")) rawContent.substring(rawContent.indexOf("["), rawContent.lastIndexOf("]") + 1) else rawContent
-                          val parsedArr = JSONArray(cleanJson)
-                          val results = mutableListOf<Pair<String, String>>()
-                          for (i in 0 until parsedArr.length()) {
-                              val item = parsedArr.optJSONObject(i)
-                              if (item != null) {
-                                  results.add(item.optString("text", "") to item.optString("speaker", "man").lowercase())
-                              } else {
-                                  results.add(parsedArr.getString(i) to "man")
-                              }
-                          }
-                          activeLockedModel = model
-                          return results
-                      }
-                  } catch (_: Exception) {}
-
-                  return texts.map { it to "man" }
-              }
-
-              private fun cleanHtmlEntities(text: String): String {
-                  return text.replace("&#39;", "'")
-                      .replace("&quot;", "\"")
-                      .replace("&amp;", "&")
-                      .replace("&lt;", "<")
-                      .replace("&gt;", ">")
-                      .replace("\n", " ")
-                      .trim()
               }
 
               private fun toggleFullscreen() {
@@ -1076,24 +612,49 @@ jobs:
                           timelineDubQueue.add(seg)
                       }
                       isSeeking.set(false)
-                      if (!isYoutubeMode) {
-                          mediaPlayerRef?.setVolume(0f, 0f)
-                          applyVideoPlaybackSpeed()
-                          videoView.start()
-                      }
+                      mediaPlayerRef?.setVolume(0f, 0f)
+                      applyVideoPlaybackSpeed()
+                      videoView.start()
                       statusBadge.text = "⚡ Instant Cache Playback"
                   } else {
-                      if (!isYoutubeMode) videoView.pause()
+                      videoView.pause()
                       statusBadge.text = "⏳ Syncing Dubbing..."
                   }
               }
 
               private fun openVideoPicker() {
-                  isYoutubeMode = false
-                  webViewPlayer.visibility = View.GONE
-                  videoView.visibility = View.VISIBLE
                   val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "video/*" }
                   startActivityForResult(intent, 100)
+              }
+
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  super.onActivityResult(requestCode, resultCode, data)
+                  if (requestCode == 100 && resultCode == RESULT_OK) {
+                      data?.data?.let { uri ->
+                          selectedVideoUri = uri
+                          contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                          
+                          videoView.setVideoURI(uri)
+                          videoView.seekTo(100)
+                          
+                          sessionCacheMap.clear()
+                          timelineDubQueue.clear()
+                          
+                          statusBadge.text = "Video loaded. Tap START to dub."
+                          centerStartBtn.visibility = View.VISIBLE
+                      }
+                  }
+              }
+
+              private fun startDubbingProcess(uri: Uri) {
+                  isProcessing.set(true)
+                  statusBadge.text = "Extracting Audio & Translating..."
+                  originalContentView.text = "Processing video stream..."
+                  translatedContentView.text = "AI translation engine running..."
+
+                  Thread {
+                      runLookAheadProducer(uri)
+                  }.start()
               }
 
               private fun formatTime(ms: Long): String {
@@ -1271,7 +832,7 @@ jobs:
                                   isSpeechActive.set(false)
                                   fullscreenSubtitleView.text = ""
                                   timelineDubQueue.clear()
-                                  if (!isYoutubeMode) videoView.pause() else webViewPlayer.evaluateJavascript("if(player) player.pauseVideo();", null)
+                                  videoView.pause()
                                   saveCurrentPosition()
                                   statusBadge.text = "Dubbing Stopped"
                                   centerStartBtn.visibility = View.VISIBLE
@@ -1285,8 +846,8 @@ jobs:
               private fun startTimestampConsumerLoop() {
                   uiHandler.postDelayed(object : Runnable {
                       override fun run() {
-                          val curPos = if (isYoutubeMode) currentYoutubeTimeMs.get() else videoView.currentPosition.toLong()
-                          val isPlaying = if (isYoutubeMode) isYoutubePlaying.get() else videoView.isPlaying
+                          val curPos = videoView.currentPosition.toLong()
+                          val isPlaying = videoView.isPlaying
 
                           if (isProcessing.get() && isPlaying && !isSeeking.get()) {
                               val now = System.currentTimeMillis()
@@ -1654,20 +1215,17 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$TARGET_MAIN"
-          echo "MainActivity successfully reset and built without conflicts"
+          echo "MainActivity successfully updated with VLC-style fullscreen mode"
 
       - name: Build Debug APK
         run: |
           PROJECT_ROOT=$(find . -name "settings.gradle*" -exec dirname {} \; | head -1)
-          if [ -z "$PROJECT_ROOT" ]; then
-            PROJECT_ROOT="."
-          fi
-          echo "Building in directory: $PROJECT_ROOT"
+          [ -z "$PROJECT_ROOT" ] && PROJECT_ROOT="."
           cd "$PROJECT_ROOT"
           gradle --no-daemon assembleDebug
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-CleanReset-apk
+          name: HindiDubPlayer-VLC-Fullscreen-apk
           path: "**/build/outputs/apk/debug/*.apk"

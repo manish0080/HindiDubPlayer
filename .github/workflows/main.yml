@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Controlled Live Dubber
+      - name: Replace MainActivity With Verified Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -332,7 +332,7 @@ jobs:
 
                       while (hasMoreAudio && isProcessing.get()) {
 
-                          // PACING: Wait for video playback so we don't spam Groq API
+                          // PACING: Wait for video playback so requests stay below rate limit
                           if (chunkIndex > 1) {
                               while (isProcessing.get() && videoView.isPlaying) {
                                   val currentPosMs = videoView.currentPosition
@@ -536,9 +536,9 @@ jobs:
                       doInput = true
                   }
 
-                  // Lightweight & Fast model to avoid Rate-Limits
+                  // Official verified Groq flagship model
                   val payload = JSONObject().apply {
-                      put("model", "llama-3.1-8b-instant")
+                      put("model", "llama-3.3-70b-versatile")
                       val messages = JSONArray().apply {
                           put(JSONObject().apply {
                               put("role", "system")
@@ -575,7 +575,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with controlled dubbing engine"
+          echo "MainActivity updated with llama-3.3-70b-versatile model"
 
       - name: Build Debug APK
         run: |
@@ -590,5 +590,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-Controlled-apk
+          name: HindiDubPlayer-FinalLive-apk
           path: "**/build/outputs/apk/debug/*.apk"

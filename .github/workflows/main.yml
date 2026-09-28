@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Verified Dubber
+      - name: Replace MainActivity With Auto Model Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -103,6 +103,7 @@ jobs:
               private val isProcessing = AtomicBoolean(false)
               private var lastErrorDetails = "No error recorded yet."
               private var processedSegments = 0
+              private var detectedChatModel: String? = null
 
               private val groqApiKey = "gsk_BNe4A96j6NLA" + "dcvlcAkAWGdyb3FY" + "itxb1szvztxpo3hH" + "1bQydBza"
 
@@ -117,7 +118,7 @@ jobs:
                       setPadding(16, 16, 16, 16)
                   }
 
-                  // Top Header with Corner Menu
+                  // Header with settings menu
                   val headerLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -161,7 +162,7 @@ jobs:
                   }
                   rootLayout.addView(statusText)
 
-                  // Persistent Error Box (Stays on screen if error happens)
+                  // Persistent Error Box
                   errorBox = TextView(this).apply {
                       text = ""
                       textSize = 12f
@@ -192,7 +193,7 @@ jobs:
                   videoView.setMediaController(controller)
 
                   videoView.setOnPreparedListener { mp ->
-                      mp.setVolume(0f, 0f) // English volume 0%
+                      mp.setVolume(0f, 0f) // Mute original English
                   }
 
                   // Center Translation ON Button
@@ -200,7 +201,7 @@ jobs:
                       text = "▶ START HINDI DUBBING"
                       textSize = 16f
                       setTextColor(Color.WHITE)
-                      setBackgroundColor(Color.parseColor("#2E7D32")) // Green
+                      setBackgroundColor(Color.parseColor("#2E7D32"))
                       setPadding(24, 16, 24, 16)
                       visibility = View.GONE
                       layoutParams = FrameLayout.LayoutParams(
@@ -222,8 +223,10 @@ jobs:
               }
 
               private fun showSettingsDialog() {
+                  val activeModel = detectedChatModel ?: "Detecting..."
                   val options = arrayOf(
-                      "Dubbing Status ($processedSegments parts done)",
+                      "Active AI Model: $activeModel",
+                      "Processed: $processedSegments chunks",
                       "View Last Error Details",
                       "Stop Current Dubbing"
                   )
@@ -231,15 +234,16 @@ jobs:
                       .setTitle("⚙️ DubPlayer Settings")
                       .setItems(options) { _, which ->
                           when (which) {
-                              0 -> Toast.makeText(this, "Processed: $processedSegments chunks", Toast.LENGTH_SHORT).show()
-                              1 -> {
+                              0 -> Toast.makeText(this, "Model: $activeModel", Toast.LENGTH_SHORT).show()
+                              1 -> Toast.makeText(this, "Processed: $processedSegments parts", Toast.LENGTH_SHORT).show()
+                              2 -> {
                                   AlertDialog.Builder(this)
                                       .setTitle("Last Error Info")
                                       .setMessage(lastErrorDetails)
                                       .setPositiveButton("OK", null)
                                       .show()
                               }
-                              2 -> {
+                              3 -> {
                                   isProcessing.set(false)
                                   tts?.stop()
                                   videoView.pause()
@@ -273,7 +277,7 @@ jobs:
                       errorBox.visibility = View.GONE
 
                       videoView.setVideoURI(uri)
-                      videoView.seekTo(1) // Show first frame
+                      videoView.seekTo(1)
 
                       statusText.text = "Video loaded! Tap 'START HINDI DUBBING' to begin."
                       centerStartBtn.visibility = View.VISIBLE
@@ -283,11 +287,60 @@ jobs:
               private fun startDubbingProcess(uri: Uri) {
                   isProcessing.set(true)
                   processedSegments = 0
-                  statusText.text = "Initializing Live Dubbing..."
+                  statusText.text = "Auto-detecting available Groq model..."
 
                   Thread {
                       startLiveStreamingPipeline(uri)
                   }.start()
+              }
+
+              private fun getAvailableChatModel(apiKey: String): String {
+                  detectedChatModel?.let { return it }
+
+                  try {
+                      val url = URL("https://api.groq.com/openai/v1/models")
+                      val conn = (url.openConnection() as HttpURLConnection).apply {
+                          requestMethod = "GET"
+                          setRequestProperty("Authorization", "Bearer $apiKey")
+                          connectTimeout = 8000
+                          readTimeout = 8000
+                          doInput = true
+                      }
+
+                      if (conn.responseCode == 200) {
+                          val res = conn.inputStream.bufferedReader().use { it.readText() }
+                          val data = JSONObject(res).optJSONArray("data")
+                          if (data != null && data.length() > 0) {
+                              val available = mutableListOf<String>()
+                              for (i in 0 until data.length()) {
+                                  val id = data.getJSONObject(i).optString("id", "")
+                                  if (id.isNotBlank() && !id.contains("whisper", ignoreCase = true)) {
+                                      available.add(id)
+                                  }
+                              }
+
+                              // Auto-select the best matching model present in user's account
+                              val selected = available.firstOrNull { it.contains("llama-3", ignoreCase = true) }
+                                  ?: available.firstOrNull { it.contains("llama3", ignoreCase = true) }
+                                  ?: available.firstOrNull { it.contains("mixtral", ignoreCase = true) }
+                                  ?: available.firstOrNull { it.contains("gemma", ignoreCase = true) }
+                                  ?: available.firstOrNull { it.contains("qwen", ignoreCase = true) }
+                                  ?: available.firstOrNull()
+
+                              if (selected != null) {
+                                  detectedChatModel = selected
+                                  return selected
+                              }
+                          }
+                      }
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                  }
+
+                  // Default safe fallback if network check drops
+                  val fallback = "llama3-8b-8192"
+                  detectedChatModel = fallback
+                  return fallback
               }
 
               private fun startLiveStreamingPipeline(uri: Uri) {
@@ -324,7 +377,13 @@ jobs:
 
                       extractor.selectTrack(audioTrackIndex)
 
-                      val chunkDurationUs = 10_000_000L // 10-sec chunk
+                      // Discover active model for user's key
+                      val activeModel = getAvailableChatModel(groqApiKey)
+                      runOnUiThread {
+                          statusText.text = "Connected to Groq Model: $activeModel\nReading audio..."
+                      }
+
+                      val chunkDurationUs = 10_000_000L // 10 seconds per chunk
                       var chunkIndex = 0
                       var hasMoreAudio = true
                       val buffer = ByteBuffer.allocate(1024 * 1024)
@@ -332,7 +391,7 @@ jobs:
 
                       while (hasMoreAudio && isProcessing.get()) {
 
-                          // PACING: Wait for video playback so requests stay below rate limit
+                          // PACING: Sync with playback
                           if (chunkIndex > 1) {
                               while (isProcessing.get() && videoView.isPlaying) {
                                   val currentPosMs = videoView.currentPosition
@@ -400,27 +459,27 @@ jobs:
                           if (chunkFile.exists() && chunkFile.length() > 500) {
                               try {
                                   runOnUiThread {
-                                      statusText.text = "Step 2/3: Transcribing audio (Part $currentChunkNum)..."
+                                      statusText.text = "Transcribing Part $currentChunkNum..."
                                   }
 
                                   val englishText = transcribeAudio(chunkFile, groqApiKey)
 
                                   if (englishText.isNotBlank()) {
                                       runOnUiThread {
-                                          statusText.text = "Step 3/3: Translating to Hindi (Part $currentChunkNum)..."
+                                          statusText.text = "Translating with $activeModel..."
                                       }
 
-                                      val hindiText = translateToHindi(englishText, groqApiKey)
+                                      val hindiText = translateToHindi(englishText, activeModel, groqApiKey)
 
                                       runOnUiThread {
                                           processedSegments++
                                           if (chunkIndex == 0) {
                                               videoView.seekTo(0)
                                               videoView.start()
-                                              statusText.text = "Hindi Dubbing Active ✓\n\n$hindiText"
+                                              statusText.text = "Hindi Dubbing Active ✓ [$activeModel]\n\n$hindiText"
                                               speakHindi(hindiText, true)
                                           } else {
-                                              statusText.text = "Hindi Dubbing (Part $currentChunkNum) ✓\n\n$hindiText"
+                                              statusText.text = "Dubbing (Part $currentChunkNum) ✓\n\n$hindiText"
                                               speakHindi(hindiText, false)
                                           }
                                       }
@@ -429,12 +488,12 @@ jobs:
                                           runOnUiThread {
                                               videoView.seekTo(0)
                                               videoView.start()
-                                              statusText.text = "Playing video (Listening for dialogues...)"
+                                              statusText.text = "Playing video (Listening for dialogue...)"
                                           }
                                       }
                                   }
                               } catch (e: Exception) {
-                                  showError("Part $currentChunkNum Error: ${e.localizedMessage}")
+                                  showError("Part $currentChunkNum: ${e.localizedMessage}")
                                   isProcessing.set(false)
                                   break
                               } finally {
@@ -456,7 +515,7 @@ jobs:
               private fun showError(msg: String) {
                   lastErrorDetails = msg
                   runOnUiThread {
-                      errorBox.text = "⚠️ $msg\n(Tap ⚙️ Menu to view details)"
+                      errorBox.text = "⚠️ $msg\n(Tap ⚙️ Menu for info)"
                       errorBox.visibility = View.VISIBLE
                       statusText.text = "Dubbing Paused on Error"
                       centerStartBtn.visibility = View.VISIBLE
@@ -524,7 +583,7 @@ jobs:
                   }
               }
 
-              private fun translateToHindi(englishText: String, apiKey: String): String {
+              private fun translateToHindi(englishText: String, modelName: String, apiKey: String): String {
                   val url = URL("https://api.groq.com/openai/v1/chat/completions")
                   val conn = (url.openConnection() as HttpURLConnection).apply {
                       requestMethod = "POST"
@@ -536,13 +595,12 @@ jobs:
                       doInput = true
                   }
 
-                  // Official verified Groq flagship model
                   val payload = JSONObject().apply {
-                      put("model", "llama-3.3-70b-versatile")
+                      put("model", modelName)
                       val messages = JSONArray().apply {
                           put(JSONObject().apply {
                               put("role", "system")
-                              put("content", "You are an expert anime & video dubber. Translate the given spoken English into natural Hindi. Return ONLY the Hindi translation in Devanagari script. Do not output English words or explanations.")
+                              put("content", "You are an expert anime voice dubber. Translate the spoken English dialogue into natural Hindi. Output ONLY the Hindi translation in Devanagari script. No English words or notes.")
                           })
                           put(JSONObject().apply {
                               put("role", "user")
@@ -561,7 +619,7 @@ jobs:
                       return JSONObject(res).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
                   } else {
                       val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $code"
-                      throw Exception("Llama: $err")
+                      throw Exception("Llama ($modelName): $err")
                   }
               }
 
@@ -575,7 +633,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with llama-3.3-70b-versatile model"
+          echo "MainActivity updated with Auto Model Discovery"
 
       - name: Build Debug APK
         run: |
@@ -590,5 +648,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-FinalLive-apk
+          name: HindiDubPlayer-AutoModel-apk
           path: "**/build/outputs/apk/debug/*.apk"

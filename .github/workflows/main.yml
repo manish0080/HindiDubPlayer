@@ -5,11 +5,11 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Java 17
         uses: actions/setup-java@v5
@@ -23,7 +23,7 @@ jobs:
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
 
       - name: Setup Gradle 9.5.0
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.5.0'
 
@@ -52,7 +52,7 @@ jobs:
             exit 1
           fi
 
-          PACKAGE=$(grep -m1 '^package ' "$MAIN" | sed 's/^package //' || echo "com.manishtomar.hindidubplayer")
+          PACKAGE="com.manishtomar.hindidubplayer"
 
           cat << 'EOF' > "$MAIN"
           package PACKAGE_NAME
@@ -126,6 +126,7 @@ jobs:
               private lateinit var fullscreenBtn: Button
               private lateinit var playPauseBtn: Button
               
+              // TranslateTube Cards UI
               private lateinit var originalTitleView: TextView
               private lateinit var originalContentView: TextView
               private lateinit var translatedTitleView: TextView
@@ -134,6 +135,7 @@ jobs:
               private lateinit var statusBadge: TextView
               private lateinit var fullscreenSubtitleView: TextView
 
+              // Pill Buttons
               private lateinit var langPillBtn: Button
               private lateinit var voicePillBtn: Button
               private lateinit var speedPillBtn: Button
@@ -152,16 +154,18 @@ jobs:
               private var activeLockedModel: String? = null
               private val candidateModels = mutableListOf<String>()
 
+              // Session Cache & Pipeline
               private val timelineDubQueue = ConcurrentLinkedQueue<TimestampDubSegment>()
               private val sessionCacheMap = ConcurrentHashMap<Long, TimestampDubSegment>()
               private var currentlyPlayingSegment: TimestampDubSegment? = null
 
+              // Cadence & Breathing
               private var lastSpeechEndTimeMs = 0L
               private val isSpeechActive = AtomicBoolean(false)
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
-              private var voiceTypeIndex = 0
+              private var voiceTypeIndex = 0 // 0 = Auto
               private var dubStyleKey = "emotional"
               private var currentPlaybackSpeed = 1.0f
 
@@ -221,6 +225,7 @@ jobs:
                   dubStyleKey = prefs.getString("DUB_STYLE", "emotional") ?: "emotional"
                   currentPlaybackSpeed = prefs.getFloat("PLAY_SPEED", 1.0f)
 
+                  // Root Frame
                   val rootFrame = FrameLayout(this).apply {
                       setBackgroundColor(Color.parseColor("#F8F9FA"))
                   }
@@ -233,6 +238,7 @@ jobs:
                       )
                   }
 
+                  // 1. TOP VIDEO CONTAINER (16:9 Aspect in Portrait)
                   videoContainer = FrameLayout(this).apply {
                       setBackgroundColor(Color.BLACK)
                       layoutParams = LinearLayout.LayoutParams(
@@ -250,6 +256,7 @@ jobs:
                   }
                   videoContainer.addView(videoView)
 
+                  // Fullscreen floating subtitle (active during landscape)
                   fullscreenSubtitleView = TextView(this).apply {
                       textSize = 15f
                       setTextColor(Color.YELLOW)
@@ -267,6 +274,7 @@ jobs:
                   }
                   videoContainer.addView(fullscreenSubtitleView)
 
+                  // Play overlay button
                   centerStartBtn = Button(this).apply {
                       text = "▶ START LIVE DUBBING"
                       textSize = 14f
@@ -288,6 +296,7 @@ jobs:
                   videoContainer.addView(centerStartBtn)
                   mainVerticalLayout.addView(videoContainer)
 
+                  // 2. SCROLLABLE TRANSLATETUBE CARDS AREA
                   mainScrollView = ScrollView(this).apply {
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
@@ -302,6 +311,7 @@ jobs:
                       setPadding(dpToPx(14), dpToPx(12), dpToPx(14), dpToPx(16))
                   }
 
+                  // Top Action Bar: Open Video + Quick Controls
                   val actionRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -389,6 +399,7 @@ jobs:
                   actionRow.addView(fullscreenBtn)
                   cardsContainer.addView(actionRow)
 
+                  // 3. PILL BUTTONS (TranslateTube Style Horizontal Scroller)
                   val pillScroller = HorizontalScrollView(this).apply {
                       isHorizontalScrollBarEnabled = false
                       val params = LinearLayout.LayoutParams(
@@ -423,6 +434,7 @@ jobs:
                   pillScroller.addView(pillRow)
                   cardsContainer.addView(pillScroller)
 
+                  // 4. STATUS & SPEAKER INFO BAR
                   val infoBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -459,6 +471,7 @@ jobs:
                   infoBar.addView(speakerTagBadge)
                   cardsContainer.addView(infoBar)
 
+                  // 5. TRANSLATETUBE ORIGINAL CARD (White Card with Subtle Border)
                   val originalCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = createCardDrawable(Color.WHITE, Color.parseColor("#CFD8DC"), dpToPx(14).toFloat(), dpToPx(1))
@@ -493,6 +506,7 @@ jobs:
                   originalCard.addView(originalContentView)
                   cardsContainer.addView(originalCard)
 
+                  // 6. TRANSLATETUBE TRANSLATED CARD (Warm Amber Tint with Orange Highlight)
                   val translatedCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = createCardDrawable(Color.parseColor("#FFF8E1"), Color.parseColor("#FFE082"), dpToPx(14).toFloat(), dpToPx(1))
@@ -550,6 +564,7 @@ jobs:
                   startTimestampConsumerLoop()
               }
 
+              // UI HELPER FUNCTIONS
               private fun dpToPx(dp: Int): Int {
                   return (dp * resources.displayMetrics.density).toInt()
               }
@@ -1006,6 +1021,7 @@ jobs:
                                               segment.isTriggered = true
                                               currentlyPlayingSegment = segment
                                               
+                                              // Update TranslateTube Cards View
                                               originalContentView.text = segment.originalText
                                               translatedContentView.text = segment.translatedText
                                               fullscreenSubtitleView.text = segment.translatedText

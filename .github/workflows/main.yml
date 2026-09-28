@@ -1,3 +1,4 @@
+build/outputs/apk/debug/*.apk"
 name: Build HindiDubPlayer APK
 
 on:
@@ -42,7 +43,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Auto-Tested Live Dubber
+      - name: Replace MainActivity With Synced Fast Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -113,8 +114,7 @@ jobs:
 
               private var lastErrorDetails = "No errors reported."
               private var processedSegments = 0
-              private var detectedChatModel: String? = null
-              private val verifiedActiveModels = mutableListOf<String>()
+              private var activeSelectedModel = "llama-3.3-70b-versatile"
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
@@ -164,13 +164,14 @@ jobs:
                   targetLangName = prefs.getString("LANG_NAME", "Hindi") ?: "Hindi"
                   voiceTypeIndex = prefs.getInt("VOICE_INDEX", 0)
                   dubStyleKey = prefs.getString("DUB_STYLE", "emotional") ?: "emotional"
+                  activeSelectedModel = prefs.getString("SAVED_MODEL", "llama-3.3-70b-versatile") ?: "llama-3.3-70b-versatile"
 
                   val rootLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setPadding(14, 14, 14, 14)
                   }
 
-                  // Header Layout
+                  // Top Header
                   val headerLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -223,7 +224,7 @@ jobs:
                   controlsRow.addView(styleBtn)
                   rootLayout.addView(controlsRow)
 
-                  // File Picker Row
+                  // Open Video Button
                   val selectBtn = Button(this).apply {
                       text = "📂 Open Video (Any Length)"
                       textSize = 12f
@@ -270,7 +271,7 @@ jobs:
                   videoView.setMediaController(controller)
 
                   videoView.setOnPreparedListener { mp ->
-                      mp.setVolume(0f, 0f)
+                      mp.setVolume(0f, 0f) // Mute original audio track
                       mp.setOnSeekCompleteListener {
                           val currentPosMs = videoView.currentPosition.toLong()
                           seekTargetUs.set(currentPosMs * 1000L)
@@ -303,7 +304,7 @@ jobs:
                   videoContainer.addView(centerStartBtn)
                   rootLayout.addView(videoContainer)
 
-                  // MX Player Quick Controls: [⏪ 10s] [⏯ Play/Pause] [⏩ 10s]
+                  // Quick Controls
                   val playerControls = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER
@@ -494,13 +495,11 @@ jobs:
               }
 
               private fun showSettingsDialog() {
-                  val activeM = detectedChatModel ?: "Scanning..."
                   val options = arrayOf(
                       "Target: $targetLangName ($targetLangCode)",
                       "Voice: ${voiceNames[voiceTypeIndex]}",
                       "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Formal"}",
-                      "Active AI Model: $activeM",
-                      "Choose Another Verified Model",
+                      "Active Model: $activeSelectedModel",
                       "View Last Error Details",
                       "Stop Dubbing"
                   )
@@ -511,16 +510,15 @@ jobs:
                               0 -> showLanguageSelector()
                               1 -> showVoiceSelector()
                               2 -> showStyleSelector()
-                              3 -> Toast.makeText(this, "Active: $activeM", Toast.LENGTH_SHORT).show()
-                              4 -> showModelSelector()
-                              5 -> {
+                              3 -> Toast.makeText(this, "Model: $activeSelectedModel", Toast.LENGTH_SHORT).show()
+                              4 -> {
                                   AlertDialog.Builder(this)
                                       .setTitle("Last Error Info")
                                       .setMessage(lastErrorDetails)
                                       .setPositiveButton("OK", null)
                                       .show()
                               }
-                              6 -> {
+                              5 -> {
                                   isProcessing.set(false)
                                   tts?.stop()
                                   videoView.pause()
@@ -531,22 +529,6 @@ jobs:
                           }
                       }
                       .setNegativeButton("Close", null)
-                      .show()
-              }
-
-              private fun showModelSelector() {
-                  if (verifiedActiveModels.isEmpty()) {
-                      Toast.makeText(this, "Scanning models, please wait...", Toast.LENGTH_SHORT).show()
-                      return
-                  }
-                  val arr = verifiedActiveModels.toTypedArray()
-                  AlertDialog.Builder(this)
-                      .setTitle("Select Active Working Model")
-                      .setItems(arr) { _, idx ->
-                          detectedChatModel = arr[idx]
-                          Toast.makeText(this, "Selected: ${arr[idx]}", Toast.LENGTH_SHORT).show()
-                      }
-                      .setNegativeButton("Cancel", null)
                       .show()
               }
 
@@ -594,123 +576,11 @@ jobs:
               private fun startDubbingProcess(uri: Uri) {
                   isProcessing.set(true)
                   processedSegments = 0
-                  statusText.text = "Finding live active model..."
+                  statusText.text = "⏳ Buffering audio (Starting in 1-2 sec)..."
 
                   Thread {
                       startLiveStreamingPipeline(uri)
                   }.start()
-              }
-
-              // DYNAMIC LIVE PROBE: Tests candidates with live 1-token requests so decommissioned models are bypassed
-              private fun findWorkingChatModel(apiKey: String): String {
-                  detectedChatModel?.let { return it }
-
-                  val discovered = mutableListOf<String>()
-
-                  try {
-                      val url = URL("https://api.groq.com/openai/v1/models")
-                      val conn = (url.openConnection() as HttpURLConnection).apply {
-                          requestMethod = "GET"
-                          setRequestProperty("Authorization", "Bearer $apiKey")
-                          connectTimeout = 7000
-                          readTimeout = 7000
-                          doInput = true
-                      }
-
-                      if (conn.responseCode == 200) {
-                          val res = conn.inputStream.bufferedReader().use { it.readText() }
-                          val data = JSONObject(res).optJSONArray("data")
-                          if (data != null && data.length() > 0) {
-                              for (i in 0 until data.length()) {
-                                  val item = data.getJSONObject(i)
-                                  val id = item.optString("id", "").trim()
-                                  val isActive = item.optBoolean("active", true)
-
-                                  // Ignore inactive (decommissioned), audio, guards, vision, and third-party models
-                                  if (isActive && id.isNotBlank() &&
-                                      !id.contains("/") &&
-                                      !id.contains("whisper", ignoreCase = true) &&
-                                      !id.contains("guard", ignoreCase = true) &&
-                                      !id.contains("vision", ignoreCase = true) &&
-                                      !id.contains("embed", ignoreCase = true) &&
-                                      !id.contains("orpheus", ignoreCase = true) &&
-                                      !id.contains("tts", ignoreCase = true)) {
-                                      discovered.add(id)
-                                  }
-                              }
-                          }
-                      }
-                  } catch (e: Exception) {
-                      e.printStackTrace()
-                  }
-
-                  // Sort candidates so fastest/best models get tested first
-                  discovered.sortByDescending {
-                      when {
-                          it.contains("llama-3.1-8b", ignoreCase = true) -> 100
-                          it.contains("llama-3.3-70b", ignoreCase = true) -> 90
-                          it.contains("llama-3", ignoreCase = true) -> 80
-                          it.contains("mixtral", ignoreCase = true) -> 70
-                          it.contains("gemma", ignoreCase = true) -> 60
-                          else -> 10
-                      }
-                  }
-
-                  // Live Probe: test each candidate
-                  for (cand in discovered) {
-                      if (probeModel(cand, apiKey)) {
-                          if (!verifiedActiveModels.contains(cand)) {
-                              verifiedActiveModels.add(cand)
-                          }
-                          if (detectedChatModel == null) {
-                              detectedChatModel = cand
-                          }
-                      }
-                  }
-
-                  detectedChatModel?.let { return it }
-
-                  // Emergency list if GET /models failed
-                  val emergencyList = listOf("llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it")
-                  for (cand in emergencyList) {
-                      if (probeModel(cand, apiKey)) {
-                          detectedChatModel = cand
-                          return cand
-                      }
-                  }
-
-                  val fallback = "llama-3.1-8b-instant"
-                  detectedChatModel = fallback
-                  return fallback
-              }
-
-              private fun probeModel(modelName: String, apiKey: String): Boolean {
-                  return try {
-                      val url = URL("https://api.groq.com/openai/v1/chat/completions")
-                      val conn = (url.openConnection() as HttpURLConnection).apply {
-                          requestMethod = "POST"
-                          setRequestProperty("Authorization", "Bearer $apiKey")
-                          setRequestProperty("Content-Type", "application/json")
-                          connectTimeout = 4000
-                          readTimeout = 4000
-                          doOutput = true
-                          doInput = true
-                      }
-                      val testJson = JSONObject().apply {
-                          put("model", modelName)
-                          put("messages", JSONArray().apply {
-                              put(JSONObject().apply {
-                                  put("role", "user")
-                                  put("content", "hi")
-                              })
-                          })
-                          put("max_tokens", 1)
-                      }
-                      conn.outputStream.use { it.write(testJson.toString().toByteArray()) }
-                      conn.responseCode == 200
-                  } catch (e: Exception) {
-                      false
-                  }
               }
 
               private fun startLiveStreamingPipeline(uri: Uri) {
@@ -747,12 +617,6 @@ jobs:
 
                       extractor.selectTrack(audioTrackIndex)
 
-                      runOnUiThread { statusText.text = "Checking available AI models..." }
-                      val activeModel = findWorkingChatModel(groqApiKey)
-                      
-                      runOnUiThread { statusText.text = "Connected: $activeModel\nReading video..." }
-
-                      val chunkDurationUs = 12_000_000L // 12-sec chunks safe for 20 RPM limit
                       var chunkIndex = 0
                       var hasMoreAudio = true
                       val buffer = ByteBuffer.allocate(1024 * 1024)
@@ -760,19 +624,30 @@ jobs:
 
                       while (hasMoreAudio && isProcessing.get()) {
 
+                          // Fast start: Chunk 0 is only 5s. Subsequent chunks are 10s.
+                          val chunkDurationUs = if (chunkIndex == 0) 5_000_000L else 10_000_000L
+
+                          // Instant jump handling
                           val targetSeek = seekTargetUs.getAndSet(-1L)
                           if (targetSeek >= 0) {
                               extractor.seekTo(targetSeek, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
                           }
 
-                          if (chunkIndex > 1) {
+                          // CRITICAL PACING FIX: Strict sync with actual video playback
+                          if (chunkIndex > 0) {
+                              // 1. If video is paused by user, wait!
+                              while (isProcessing.get() && !videoView.isPlaying && seekTargetUs.get() < 0) {
+                                  Thread.sleep(250)
+                              }
+
+                              // 2. Wait until video reaches current chunk's timeline so we never rush ahead of video
+                              val expectedChunkTimeMs = (if (chunkIndex == 1) 5000L else 5000L + (chunkIndex - 1) * 10000L)
                               while (isProcessing.get() && videoView.isPlaying && seekTargetUs.get() < 0) {
                                   val currentPosMs = videoView.currentPosition
-                                  val chunkStartMs = (chunkIndex - 1) * 12_000L
-                                  if (currentPosMs >= chunkStartMs) {
-                                      break
+                                  if (currentPosMs >= expectedChunkTimeMs - 2000L) {
+                                      break // Ready to process next chunk
                                   }
-                                  Thread.sleep(400)
+                                  Thread.sleep(300)
                               }
                           }
 
@@ -839,22 +714,19 @@ jobs:
                           if (chunkFile.exists() && chunkFile.length() > 500) {
                               try {
                                   runOnUiThread {
-                                      statusText.text = "Recognizing audio (Part $currentChunkNum)..."
+                                      statusText.text = "Translating part $currentChunkNum..."
                                   }
 
                                   val recognizedText = transcribeAudioWithRetry(chunkFile, groqApiKey)
 
                                   if (recognizedText.isNotBlank()) {
-                                      runOnUiThread {
-                                          statusText.text = "Dubbing ($targetLangName) via $activeModel..."
-                                      }
-
-                                      val currentModelToUse = detectedChatModel ?: activeModel
-                                      val dubbedText = translateWithRetry(recognizedText, targetLangName, dubStyleKey, currentModelToUse, groqApiKey)
+                                      val dubbedText = translateWithRetry(recognizedText, targetLangName, dubStyleKey, activeSelectedModel, groqApiKey)
 
                                       runOnUiThread {
                                           processedSegments++
                                           saveCurrentPosition()
+
+                                          // Auto-start video on chunk 0
                                           if (chunkIndex == 0 && !videoView.isPlaying) {
                                               videoView.seekTo(0)
                                               videoView.start()
@@ -866,11 +738,12 @@ jobs:
                                           }
                                       }
                                   } else {
+                                      // Silence / No speech in this segment
                                       if (chunkIndex == 0 && !videoView.isPlaying) {
                                           runOnUiThread {
                                               videoView.seekTo(0)
                                               videoView.start()
-                                              statusText.text = "Playing (Listening for dialogue...)"
+                                              statusText.text = "Playing (Listening for dialogues...)"
                                           }
                                       }
                                   }
@@ -922,13 +795,13 @@ jobs:
                           val msg = e.localizedMessage ?: ""
                           if (msg.contains("429") || msg.contains("rate_limit", ignoreCase = true)) {
                               attempts++
-                              Thread.sleep(3500)
+                              Thread.sleep(3000)
                           } else {
                               throw e
                           }
                       }
                   }
-                  throw Exception("Whisper rate limit. Please wait 3 seconds.")
+                  throw Exception("Audio transcription busy. Retrying...")
               }
 
               private fun transcribeAudio(audioFile: File, apiKey: String): String {
@@ -999,7 +872,7 @@ jobs:
                           }
                       }
                   }
-                  throw Exception("Translation rate limit. Retrying...")
+                  throw Exception("Translation server busy. Retrying...")
               }
 
               private fun translateToLang(sourceText: String, targetLang: String, style: String, modelName: String, apiKey: String): String {
@@ -1064,7 +937,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with live auto-probe model selector"
+          echo "MainActivity updated with Fast Auto-Start and Sync Pacing"
 
       - name: Build Debug APK
         run: |
@@ -1079,5 +952,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-AutoProbe-apk
+          name: HindiDubPlayer-PacingFixed-apk
           path: "**/build/outputs/apk/debug/*.apk"

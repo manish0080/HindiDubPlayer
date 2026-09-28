@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Final Safe MX Player Dubber
+      - name: Replace MainActivity With Auto-Tested Live Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -113,7 +113,8 @@ jobs:
 
               private var lastErrorDetails = "No errors reported."
               private var processedSegments = 0
-              private var activeSelectedModel = "llama3-8b-8192"
+              private var detectedChatModel: String? = null
+              private val verifiedActiveModels = mutableListOf<String>()
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
@@ -149,20 +150,11 @@ jobs:
                   "📖 किताबी (Formal Textbook)"
               )
 
-              // 100% Free Official Meta & Google Whitelist (No terms or admin approval required)
-              private val strictSafeWhitelist = listOf(
-                  "llama3-8b-8192",
-                  "llama-3.3-70b-versatile",
-                  "mixtral-8x7b-32768",
-                  "gemma2-9b-it"
-              )
-
               private val groqApiKey = "gsk_BNe4A96j6NLA" + "dcvlcAkAWGdyb3FY" + "itxb1szvztxpo3hH" + "1bQydBza"
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
-                  // Keep display on during long movies/anime
                   window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                   volumeControlStream = AudioManager.STREAM_MUSIC
                   tts = TextToSpeech(this, this)
@@ -178,7 +170,7 @@ jobs:
                       setPadding(14, 14, 14, 14)
                   }
 
-                  // Top Header
+                  // Header Layout
                   val headerLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -231,7 +223,7 @@ jobs:
                   controlsRow.addView(styleBtn)
                   rootLayout.addView(controlsRow)
 
-                  // Open Video Button
+                  // File Picker Row
                   val selectBtn = Button(this).apply {
                       text = "📂 Open Video (Any Length)"
                       textSize = 12f
@@ -278,7 +270,7 @@ jobs:
                   videoView.setMediaController(controller)
 
                   videoView.setOnPreparedListener { mp ->
-                      mp.setVolume(0f, 0f) // Mute original audio track
+                      mp.setVolume(0f, 0f)
                       mp.setOnSeekCompleteListener {
                           val currentPosMs = videoView.currentPosition.toLong()
                           seekTargetUs.set(currentPosMs * 1000L)
@@ -468,22 +460,22 @@ jobs:
                       } ?: langVoices.firstOrNull { it.name.contains("c-local", true) || it.name.contains("a-local", true) }
 
                       when (voiceTypeIndex) {
-                          0 -> { // Man: Solid, deep, punchy
+                          0 -> { // Man
                               if (maleVoice != null) tts?.voice = maleVoice
                               tts?.setPitch(0.75f)
                               tts?.setSpeechRate(1.10f)
                           }
-                          1 -> { // Woman: Clear female
+                          1 -> { // Woman
                               if (femaleVoice != null) tts?.voice = femaleVoice
                               tts?.setPitch(1.00f)
                               tts?.setSpeechRate(1.10f)
                           }
-                          2 -> { // Boy: Energetic youth
+                          2 -> { // Boy
                               if (maleVoice != null) tts?.voice = maleVoice
                               tts?.setPitch(1.18f)
                               tts?.setSpeechRate(1.12f)
                           }
-                          3 -> { // Girl / Child: Soft tone
+                          3 -> { // Girl
                               if (femaleVoice != null) tts?.voice = femaleVoice
                               tts?.setPitch(1.38f)
                               tts?.setSpeechRate(1.10f)
@@ -502,12 +494,13 @@ jobs:
               }
 
               private fun showSettingsDialog() {
+                  val activeM = detectedChatModel ?: "Scanning..."
                   val options = arrayOf(
                       "Target: $targetLangName ($targetLangCode)",
                       "Voice: ${voiceNames[voiceTypeIndex]}",
                       "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Formal"}",
-                      "Active AI Model: $activeSelectedModel",
-                      "Chunks Dubbed: $processedSegments",
+                      "Active AI Model: $activeM",
+                      "Choose Another Verified Model",
                       "View Last Error Details",
                       "Stop Dubbing"
                   )
@@ -518,8 +511,8 @@ jobs:
                               0 -> showLanguageSelector()
                               1 -> showVoiceSelector()
                               2 -> showStyleSelector()
-                              3 -> Toast.makeText(this, "Model: $activeSelectedModel", Toast.LENGTH_SHORT).show()
-                              4 -> Toast.makeText(this, "$processedSegments chunks dubbed", Toast.LENGTH_SHORT).show()
+                              3 -> Toast.makeText(this, "Active: $activeM", Toast.LENGTH_SHORT).show()
+                              4 -> showModelSelector()
                               5 -> {
                                   AlertDialog.Builder(this)
                                       .setTitle("Last Error Info")
@@ -541,6 +534,22 @@ jobs:
                       .show()
               }
 
+              private fun showModelSelector() {
+                  if (verifiedActiveModels.isEmpty()) {
+                      Toast.makeText(this, "Scanning models, please wait...", Toast.LENGTH_SHORT).show()
+                      return
+                  }
+                  val arr = verifiedActiveModels.toTypedArray()
+                  AlertDialog.Builder(this)
+                      .setTitle("Select Active Working Model")
+                      .setItems(arr) { _, idx ->
+                          detectedChatModel = arr[idx]
+                          Toast.makeText(this, "Selected: ${arr[idx]}", Toast.LENGTH_SHORT).show()
+                      }
+                      .setNegativeButton("Cancel", null)
+                      .show()
+              }
+
               override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
                   super.onActivityResult(requestCode, resultCode, data)
 
@@ -555,7 +564,6 @@ jobs:
 
                       videoView.setVideoURI(uri)
 
-                      // MX Player Smart Resume
                       val savedPos = getSharedPreferences("DubSettings", Context.MODE_PRIVATE)
                           .getInt("POS_" + uri.toString().hashCode(), 0)
 
@@ -586,15 +594,19 @@ jobs:
               private fun startDubbingProcess(uri: Uri) {
                   isProcessing.set(true)
                   processedSegments = 0
-                  statusText.text = "Connecting to Safe Meta AI Server..."
+                  statusText.text = "Finding live active model..."
 
                   Thread {
                       startLiveStreamingPipeline(uri)
                   }.start()
               }
 
-              // Picks ONLY strictly whitelisted models, never touches Saudi/Arabic/experimental models
-              private fun getStrictFreeModel(apiKey: String): String {
+              // DYNAMIC LIVE PROBE: Tests candidates with live 1-token requests so decommissioned models are bypassed
+              private fun findWorkingChatModel(apiKey: String): String {
+                  detectedChatModel?.let { return it }
+
+                  val discovered = mutableListOf<String>()
+
                   try {
                       val url = URL("https://api.groq.com/openai/v1/models")
                       val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -609,18 +621,21 @@ jobs:
                           val res = conn.inputStream.bufferedReader().use { it.readText() }
                           val data = JSONObject(res).optJSONArray("data")
                           if (data != null && data.length() > 0) {
-                              val availableInAccount = HashSet<String>()
                               for (i in 0 until data.length()) {
-                                  val id = data.getJSONObject(i).optString("id", "").trim()
-                                  if (id.isNotBlank()) {
-                                      availableInAccount.add(id)
-                                  }
-                              }
+                                  val item = data.getJSONObject(i)
+                                  val id = item.optString("id", "").trim()
+                                  val isActive = item.optBoolean("active", true)
 
-                              for (safeModel in strictSafeWhitelist) {
-                                  if (availableInAccount.contains(safeModel)) {
-                                      activeSelectedModel = safeModel
-                                      return safeModel
+                                  // Ignore inactive (decommissioned), audio, guards, vision, and third-party models
+                                  if (isActive && id.isNotBlank() &&
+                                      !id.contains("/") &&
+                                      !id.contains("whisper", ignoreCase = true) &&
+                                      !id.contains("guard", ignoreCase = true) &&
+                                      !id.contains("vision", ignoreCase = true) &&
+                                      !id.contains("embed", ignoreCase = true) &&
+                                      !id.contains("orpheus", ignoreCase = true) &&
+                                      !id.contains("tts", ignoreCase = true)) {
+                                      discovered.add(id)
                                   }
                               }
                           }
@@ -629,9 +644,73 @@ jobs:
                       e.printStackTrace()
                   }
 
-                  val fallback = "llama3-8b-8192"
-                  activeSelectedModel = fallback
+                  // Sort candidates so fastest/best models get tested first
+                  discovered.sortByDescending {
+                      when {
+                          it.contains("llama-3.1-8b", ignoreCase = true) -> 100
+                          it.contains("llama-3.3-70b", ignoreCase = true) -> 90
+                          it.contains("llama-3", ignoreCase = true) -> 80
+                          it.contains("mixtral", ignoreCase = true) -> 70
+                          it.contains("gemma", ignoreCase = true) -> 60
+                          else -> 10
+                      }
+                  }
+
+                  // Live Probe: test each candidate
+                  for (cand in discovered) {
+                      if (probeModel(cand, apiKey)) {
+                          if (!verifiedActiveModels.contains(cand)) {
+                              verifiedActiveModels.add(cand)
+                          }
+                          if (detectedChatModel == null) {
+                              detectedChatModel = cand
+                          }
+                      }
+                  }
+
+                  detectedChatModel?.let { return it }
+
+                  // Emergency list if GET /models failed
+                  val emergencyList = listOf("llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it")
+                  for (cand in emergencyList) {
+                      if (probeModel(cand, apiKey)) {
+                          detectedChatModel = cand
+                          return cand
+                      }
+                  }
+
+                  val fallback = "llama-3.1-8b-instant"
+                  detectedChatModel = fallback
                   return fallback
+              }
+
+              private fun probeModel(modelName: String, apiKey: String): Boolean {
+                  return try {
+                      val url = URL("https://api.groq.com/openai/v1/chat/completions")
+                      val conn = (url.openConnection() as HttpURLConnection).apply {
+                          requestMethod = "POST"
+                          setRequestProperty("Authorization", "Bearer $apiKey")
+                          setRequestProperty("Content-Type", "application/json")
+                          connectTimeout = 4000
+                          readTimeout = 4000
+                          doOutput = true
+                          doInput = true
+                      }
+                      val testJson = JSONObject().apply {
+                          put("model", modelName)
+                          put("messages", JSONArray().apply {
+                              put(JSONObject().apply {
+                                  put("role", "user")
+                                  put("content", "hi")
+                              })
+                          })
+                          put("max_tokens", 1)
+                      }
+                      conn.outputStream.use { it.write(testJson.toString().toByteArray()) }
+                      conn.responseCode == 200
+                  } catch (e: Exception) {
+                      false
+                  }
               }
 
               private fun startLiveStreamingPipeline(uri: Uri) {
@@ -668,8 +747,12 @@ jobs:
 
                       extractor.selectTrack(audioTrackIndex)
 
-                      val activeModel = getStrictFreeModel(groqApiKey)
-                      val chunkDurationUs = 12_000_000L // 12-sec chunks (5 RPM safe)
+                      runOnUiThread { statusText.text = "Checking available AI models..." }
+                      val activeModel = findWorkingChatModel(groqApiKey)
+                      
+                      runOnUiThread { statusText.text = "Connected: $activeModel\nReading video..." }
+
+                      val chunkDurationUs = 12_000_000L // 12-sec chunks safe for 20 RPM limit
                       var chunkIndex = 0
                       var hasMoreAudio = true
                       val buffer = ByteBuffer.allocate(1024 * 1024)
@@ -677,7 +760,6 @@ jobs:
 
                       while (hasMoreAudio && isProcessing.get()) {
 
-                          // Instant jump when user seeks in video
                           val targetSeek = seekTargetUs.getAndSet(-1L)
                           if (targetSeek >= 0) {
                               extractor.seekTo(targetSeek, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
@@ -764,10 +846,11 @@ jobs:
 
                                   if (recognizedText.isNotBlank()) {
                                       runOnUiThread {
-                                          statusText.text = "Dubbing into $targetLangName ($activeModel)..."
+                                          statusText.text = "Dubbing ($targetLangName) via $activeModel..."
                                       }
 
-                                      val dubbedText = translateWithRetry(recognizedText, targetLangName, dubStyleKey, activeModel, groqApiKey)
+                                      val currentModelToUse = detectedChatModel ?: activeModel
+                                      val dubbedText = translateWithRetry(recognizedText, targetLangName, dubStyleKey, currentModelToUse, groqApiKey)
 
                                       runOnUiThread {
                                           processedSegments++
@@ -981,7 +1064,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully updated with strict free Meta whitelist"
+          echo "MainActivity updated with live auto-probe model selector"
 
       - name: Build Debug APK
         run: |
@@ -996,5 +1079,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-FinalPro-apk
+          name: HindiDubPlayer-AutoProbe-apk
           path: "**/build/outputs/apk/debug/*.apk"

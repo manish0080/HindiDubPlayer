@@ -42,7 +42,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Replace MainActivity With Hardware Voice Dubber
+      - name: Replace MainActivity With Final Safe MX Player Dubber
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -66,14 +66,13 @@ jobs:
           import android.media.MediaExtractor
           import android.media.MediaFormat
           import android.media.MediaMuxer
-          import android.media.MediaPlayer
           import android.net.Uri
           import android.os.Bundle
           import android.os.ParcelFileDescriptor
           import android.speech.tts.TextToSpeech
-          import android.speech.tts.Voice
           import android.view.Gravity
           import android.view.View
+          import android.view.WindowManager
           import android.widget.Button
           import android.widget.FrameLayout
           import android.widget.LinearLayout
@@ -99,6 +98,7 @@ jobs:
               private lateinit var statusText: TextView
               private lateinit var errorBox: TextView
               private lateinit var centerStartBtn: Button
+              private lateinit var playPauseBtn: Button
               
               private lateinit var langBtn: Button
               private lateinit var voiceBtn: Button
@@ -113,13 +113,12 @@ jobs:
 
               private var lastErrorDetails = "No errors reported."
               private var processedSegments = 0
-              private var detectedChatModel: String? = null
+              private var activeSelectedModel = "llama3-8b-8192"
 
-              // Persistent Preferences
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
-              private var voiceTypeIndex = 0 // 0: Man, 1: Woman, 2: Boy, 3: Girl
-              private var dubStyleKey = "emotional" // "emotional" or "formal"
+              private var voiceTypeIndex = 0
+              private var dubStyleKey = "emotional"
 
               private val availableLanguages = arrayOf(
                   "Hindi (हिन्दी)" to ("hi" to "Hindi"),
@@ -150,15 +149,24 @@ jobs:
                   "📖 किताबी (Formal Textbook)"
               )
 
+              // 100% Free Official Meta & Google Whitelist (No terms or admin approval required)
+              private val strictSafeWhitelist = listOf(
+                  "llama3-8b-8192",
+                  "llama-3.3-70b-versatile",
+                  "mixtral-8x7b-32768",
+                  "gemma2-9b-it"
+              )
+
               private val groqApiKey = "gsk_BNe4A96j6NLA" + "dcvlcAkAWGdyb3FY" + "itxb1szvztxpo3hH" + "1bQydBza"
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
+                  // Keep display on during long movies/anime
+                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                   volumeControlStream = AudioManager.STREAM_MUSIC
                   tts = TextToSpeech(this, this)
 
-                  // Load saved settings
                   val prefs = getSharedPreferences("DubSettings", Context.MODE_PRIVATE)
                   targetLangCode = prefs.getString("LANG_CODE", "hi") ?: "hi"
                   targetLangName = prefs.getString("LANG_NAME", "Hindi") ?: "Hindi"
@@ -167,7 +175,7 @@ jobs:
 
                   val rootLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setPadding(16, 16, 16, 16)
+                      setPadding(14, 14, 14, 14)
                   }
 
                   // Top Header
@@ -178,7 +186,7 @@ jobs:
 
                   val titleView = TextView(this).apply {
                       text = "Hindi DubPlayer Pro"
-                      textSize = 19f
+                      textSize = 18f
                       setTextColor(Color.BLACK)
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                   }
@@ -192,10 +200,10 @@ jobs:
                   headerLayout.addView(menuBtn)
                   rootLayout.addView(headerLayout)
 
-                  // Controls Row: [Language] [Voice] [Style]
+                  // Settings Row: [Language] [Voice] [Style]
                   val controlsRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
-                      setPadding(0, 6, 0, 6)
+                      setPadding(0, 4, 0, 4)
                   }
 
                   langBtn = Button(this).apply {
@@ -223,39 +231,34 @@ jobs:
                   controlsRow.addView(styleBtn)
                   rootLayout.addView(controlsRow)
 
-                  // Select Video Button
+                  // Open Video Button
                   val selectBtn = Button(this).apply {
-                      text = "📁 Select English / Long Video"
-                      setOnClickListener {
-                          val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                              addCategory(Intent.CATEGORY_OPENABLE)
-                              type = "video/*"
-                          }
-                          startActivityForResult(intent, 100)
-                      }
+                      text = "📂 Open Video (Any Length)"
+                      textSize = 12f
+                      setOnClickListener { openVideoPicker() }
                   }
                   rootLayout.addView(selectBtn)
 
                   // Status Text
                   statusText = TextView(this).apply {
-                      text = "Select a video to start"
+                      text = "Open a video to start"
                       textSize = 13f
                       gravity = Gravity.CENTER
-                      setPadding(0, 6, 0, 6)
+                      setPadding(0, 4, 0, 4)
                   }
                   rootLayout.addView(statusText)
 
-                  // Persistent Error Box
+                  // Persistent Error Banner
                   errorBox = TextView(this).apply {
                       textSize = 12f
                       setTextColor(Color.WHITE)
                       setBackgroundColor(Color.parseColor("#B00020"))
-                      setPadding(16, 10, 16, 10)
+                      setPadding(14, 8, 14, 8)
                       visibility = View.GONE
                   }
                   rootLayout.addView(errorBox)
 
-                  // Video Container with Center Button
+                  // Video Frame
                   val videoContainer = FrameLayout(this).apply {
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
@@ -275,13 +278,13 @@ jobs:
                   videoView.setMediaController(controller)
 
                   videoView.setOnPreparedListener { mp ->
-                      mp.setVolume(0f, 0f) // English volume 0%
+                      mp.setVolume(0f, 0f) // Mute original audio track
                       mp.setOnSeekCompleteListener {
                           val currentPosMs = videoView.currentPosition.toLong()
                           seekTargetUs.set(currentPosMs * 1000L)
                           tts?.stop()
                           runOnUiThread {
-                              statusText.text = "Jumped to ${currentPosMs / 1000}s (Syncing voice)..."
+                              statusText.text = "Syncing dubbing at ${formatTime(currentPosMs)}..."
                           }
                       }
                   }
@@ -308,7 +311,75 @@ jobs:
                   videoContainer.addView(centerStartBtn)
                   rootLayout.addView(videoContainer)
 
+                  // MX Player Quick Controls: [⏪ 10s] [⏯ Play/Pause] [⏩ 10s]
+                  val playerControls = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER
+                      setPadding(0, 6, 0, 6)
+                  }
+
+                  val rewBtn = Button(this).apply {
+                      text = "⏪ 10s"
+                      setOnClickListener {
+                          val newPos = (videoView.currentPosition - 10000).coerceAtLeast(0)
+                          videoView.seekTo(newPos)
+                      }
+                  }
+                  playerControls.addView(rewBtn)
+
+                  playPauseBtn = Button(this).apply {
+                      text = "⏯ Play/Pause"
+                      setOnClickListener {
+                          if (videoView.isPlaying) {
+                              videoView.pause()
+                              tts?.stop()
+                              saveCurrentPosition()
+                              statusText.text = "Paused at ${formatTime(videoView.currentPosition.toLong())}"
+                          } else {
+                              videoView.start()
+                              statusText.text = "Playing with Live Dubbing"
+                          }
+                      }
+                  }
+                  playerControls.addView(playPauseBtn)
+
+                  val fwdBtn = Button(this).apply {
+                      text = "⏩ 10s"
+                      setOnClickListener {
+                          val newPos = (videoView.currentPosition + 10000).coerceAtMost(videoView.duration)
+                          videoView.seekTo(newPos)
+                      }
+                  }
+                  playerControls.addView(fwdBtn)
+                  rootLayout.addView(playerControls)
+
                   setContentView(rootLayout)
+              }
+
+              private fun openVideoPicker() {
+                  val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                      addCategory(Intent.CATEGORY_OPENABLE)
+                      type = "video/*"
+                  }
+                  startActivityForResult(intent, 100)
+              }
+
+              private fun formatTime(ms: Long): String {
+                  val totalSec = ms / 1000
+                  val h = totalSec / 3600
+                  val m = (totalSec % 3600) / 60
+                  val s = totalSec % 60
+                  return if (h > 0) String.format("%02d:%02d:%02d", h, m, s) else String.format("%02d:%02d", m, s)
+              }
+
+              private fun saveCurrentPosition() {
+                  val uri = selectedVideoUri ?: return
+                  val pos = videoView.currentPosition
+                  if (pos > 3000) {
+                      getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
+                          .putInt("POS_" + uri.toString().hashCode(), pos)
+                          .apply()
+                  }
               }
 
               private fun showLanguageSelector() {
@@ -321,8 +392,7 @@ jobs:
                           targetLangName = chosen.second
                           langBtn.text = "🌐 $targetLangName ▼"
 
-                          val prefs = getSharedPreferences("DubSettings", Context.MODE_PRIVATE)
-                          prefs.edit()
+                          getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
                               .putString("LANG_CODE", targetLangCode)
                               .putString("LANG_NAME", targetLangName)
                               .apply()
@@ -342,8 +412,9 @@ jobs:
                           voiceTypeIndex = which
                           voiceBtn.text = voiceNames[voiceTypeIndex].split(" ")[1] + " ▼"
 
-                          val prefs = getSharedPreferences("DubSettings", Context.MODE_PRIVATE)
-                          prefs.edit().putInt("VOICE_INDEX", voiceTypeIndex).apply()
+                          getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
+                              .putInt("VOICE_INDEX", voiceTypeIndex)
+                              .apply()
 
                           applyVoicePreset()
                           Toast.makeText(this, "Voice: ${voiceNames[which]}", Toast.LENGTH_SHORT).show()
@@ -354,13 +425,14 @@ jobs:
 
               private fun showStyleSelector() {
                   AlertDialog.Builder(this)
-                      .setTitle("Choose Dubbing Style (अनुवाद स्टाइल)")
+                      .setTitle("Choose Dubbing Style")
                       .setItems(styleNames) { _, which ->
                           dubStyleKey = if (which == 0) "emotional" else "formal"
                           styleBtn.text = if (dubStyleKey == "emotional") "🎭 इमोशनल ▼" else "📖 किताबी ▼"
 
-                          val prefs = getSharedPreferences("DubSettings", Context.MODE_PRIVATE)
-                          prefs.edit().putString("DUB_STYLE", dubStyleKey).apply()
+                          getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
+                              .putString("DUB_STYLE", dubStyleKey)
+                              .apply()
 
                           Toast.makeText(this, "Style: ${styleNames[which]}", Toast.LENGTH_SHORT).show()
                       }
@@ -396,29 +468,28 @@ jobs:
                       } ?: langVoices.firstOrNull { it.name.contains("c-local", true) || it.name.contains("a-local", true) }
 
                       when (voiceTypeIndex) {
-                          0 -> { // Man: कड़क और गहरा मर्द (Deep solid base) + 1.10x Speech Rate
+                          0 -> { // Man: Solid, deep, punchy
                               if (maleVoice != null) tts?.voice = maleVoice
                               tts?.setPitch(0.75f)
                               tts?.setSpeechRate(1.10f)
                           }
-                          1 -> { // Woman: साफ़ महिला + 1.10x Speech Rate
+                          1 -> { // Woman: Clear female
                               if (femaleVoice != null) tts?.voice = femaleVoice
                               tts?.setPitch(1.00f)
                               tts?.setSpeechRate(1.10f)
                           }
-                          2 -> { // Boy: जवान लड़का + 1.12x Speech Rate
+                          2 -> { // Boy: Energetic youth
                               if (maleVoice != null) tts?.voice = maleVoice
                               tts?.setPitch(1.18f)
                               tts?.setSpeechRate(1.12f)
                           }
-                          3 -> { // Girl / Child: लड़की + 1.10x Speech Rate
+                          3 -> { // Girl / Child: Soft tone
                               if (femaleVoice != null) tts?.voice = femaleVoice
                               tts?.setPitch(1.38f)
                               tts?.setSpeechRate(1.10f)
                           }
                       }
                   } catch (e: Exception) {
-                      e.printStackTrace()
                       tts?.setSpeechRate(1.10f)
                   }
               }
@@ -431,15 +502,14 @@ jobs:
               }
 
               private fun showSettingsDialog() {
-                  val model = detectedChatModel ?: "Discovering..."
                   val options = arrayOf(
                       "Target: $targetLangName ($targetLangCode)",
                       "Voice: ${voiceNames[voiceTypeIndex]}",
-                      "Style: ${if (dubStyleKey == "emotional") "Emotional (Natural)" else "Textbook (Formal)"}",
-                      "Active AI Model: $model",
-                      "Processed: $processedSegments parts",
+                      "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Formal"}",
+                      "Active AI Model: $activeSelectedModel",
+                      "Chunks Dubbed: $processedSegments",
                       "View Last Error Details",
-                      "Stop Current Dubbing"
+                      "Stop Dubbing"
                   )
                   AlertDialog.Builder(this)
                       .setTitle("⚙️ DubPlayer Settings")
@@ -448,7 +518,7 @@ jobs:
                               0 -> showLanguageSelector()
                               1 -> showVoiceSelector()
                               2 -> showStyleSelector()
-                              3 -> Toast.makeText(this, "Model: $model", Toast.LENGTH_SHORT).show()
+                              3 -> Toast.makeText(this, "Model: $activeSelectedModel", Toast.LENGTH_SHORT).show()
                               4 -> Toast.makeText(this, "$processedSegments chunks dubbed", Toast.LENGTH_SHORT).show()
                               5 -> {
                                   AlertDialog.Builder(this)
@@ -461,6 +531,7 @@ jobs:
                                   isProcessing.set(false)
                                   tts?.stop()
                                   videoView.pause()
+                                  saveCurrentPosition()
                                   statusText.text = "Dubbing Stopped."
                                   centerStartBtn.visibility = View.VISIBLE
                               }
@@ -483,33 +554,54 @@ jobs:
                       errorBox.visibility = View.GONE
 
                       videoView.setVideoURI(uri)
-                      videoView.seekTo(1)
 
-                      statusText.text = "Video loaded! Tap 'START LIVE DUBBING'."
-                      centerStartBtn.visibility = View.VISIBLE
+                      // MX Player Smart Resume
+                      val savedPos = getSharedPreferences("DubSettings", Context.MODE_PRIVATE)
+                          .getInt("POS_" + uri.toString().hashCode(), 0)
+
+                      if (savedPos > 5000) {
+                          AlertDialog.Builder(this)
+                              .setTitle("Resume Video")
+                              .setMessage("Previous playback stopped at ${formatTime(savedPos.toLong())}. Resume from here?")
+                              .setPositiveButton("Resume") { _, _ ->
+                                  videoView.seekTo(savedPos)
+                                  statusText.text = "Resumed at ${formatTime(savedPos.toLong())}. Tap START."
+                                  centerStartBtn.visibility = View.VISIBLE
+                              }
+                              .setNegativeButton("Start from beginning") { _, _ ->
+                                  videoView.seekTo(1)
+                                  statusText.text = "Video loaded. Tap START."
+                                  centerStartBtn.visibility = View.VISIBLE
+                              }
+                              .setCancelable(false)
+                              .show()
+                      } else {
+                          videoView.seekTo(1)
+                          statusText.text = "Video ready! Tap 'START LIVE DUBBING'."
+                          centerStartBtn.visibility = View.VISIBLE
+                      }
                   }
               }
 
               private fun startDubbingProcess(uri: Uri) {
                   isProcessing.set(true)
                   processedSegments = 0
-                  statusText.text = "Auto-detecting language & connecting..."
+                  statusText.text = "Connecting to Safe Meta AI Server..."
 
                   Thread {
                       startLiveStreamingPipeline(uri)
                   }.start()
               }
 
-              private fun getAvailableChatModel(apiKey: String): String {
-                  detectedChatModel?.let { return it }
-
+              // Picks ONLY strictly whitelisted models, never touches Saudi/Arabic/experimental models
+              private fun getStrictFreeModel(apiKey: String): String {
                   try {
                       val url = URL("https://api.groq.com/openai/v1/models")
                       val conn = (url.openConnection() as HttpURLConnection).apply {
                           requestMethod = "GET"
                           setRequestProperty("Authorization", "Bearer $apiKey")
-                          connectTimeout = 8000
-                          readTimeout = 8000
+                          connectTimeout = 7000
+                          readTimeout = 7000
                           doInput = true
                       }
 
@@ -517,23 +609,19 @@ jobs:
                           val res = conn.inputStream.bufferedReader().use { it.readText() }
                           val data = JSONObject(res).optJSONArray("data")
                           if (data != null && data.length() > 0) {
-                              val available = mutableListOf<String>()
+                              val availableInAccount = HashSet<String>()
                               for (i in 0 until data.length()) {
-                                  val id = data.getJSONObject(i).optString("id", "")
-                                  if (id.isNotBlank() && !id.contains("whisper", ignoreCase = true)) {
-                                      available.add(id)
+                                  val id = data.getJSONObject(i).optString("id", "").trim()
+                                  if (id.isNotBlank()) {
+                                      availableInAccount.add(id)
                                   }
                               }
 
-                              val selected = available.firstOrNull { it.contains("llama-3.3-70b-versatile", ignoreCase = true) }
-                                  ?: available.firstOrNull { it.contains("llama3-8b-8192", ignoreCase = true) }
-                                  ?: available.firstOrNull { it.contains("llama-3", ignoreCase = true) }
-                                  ?: available.firstOrNull { it.contains("mixtral", ignoreCase = true) }
-                                  ?: available.firstOrNull()
-
-                              if (selected != null) {
-                                  detectedChatModel = selected
-                                  return selected
+                              for (safeModel in strictSafeWhitelist) {
+                                  if (availableInAccount.contains(safeModel)) {
+                                      activeSelectedModel = safeModel
+                                      return safeModel
+                                  }
                               }
                           }
                       }
@@ -542,7 +630,7 @@ jobs:
                   }
 
                   val fallback = "llama3-8b-8192"
-                  detectedChatModel = fallback
+                  activeSelectedModel = fallback
                   return fallback
               }
 
@@ -553,7 +641,7 @@ jobs:
                       pfd = contentResolver.openFileDescriptor(uri, "r")
                       val descriptor = pfd?.fileDescriptor
                       if (descriptor == null) {
-                          showError("Cannot access video stream")
+                          showError("Cannot access video file stream")
                           return
                       }
 
@@ -580,8 +668,8 @@ jobs:
 
                       extractor.selectTrack(audioTrackIndex)
 
-                      val activeModel = getAvailableChatModel(groqApiKey)
-                      val chunkDurationUs = 12_000_000L // 12-sec chunks safe for 20 RPM limit
+                      val activeModel = getStrictFreeModel(groqApiKey)
+                      val chunkDurationUs = 12_000_000L // 12-sec chunks (5 RPM safe)
                       var chunkIndex = 0
                       var hasMoreAudio = true
                       val buffer = ByteBuffer.allocate(1024 * 1024)
@@ -589,13 +677,12 @@ jobs:
 
                       while (hasMoreAudio && isProcessing.get()) {
 
-                          // Instant jump if user skipped to 2.5 hours
+                          // Instant jump when user seeks in video
                           val targetSeek = seekTargetUs.getAndSet(-1L)
                           if (targetSeek >= 0) {
                               extractor.seekTo(targetSeek, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
                           }
 
-                          // Playback pacing
                           if (chunkIndex > 1) {
                               while (isProcessing.get() && videoView.isPlaying && seekTargetUs.get() < 0) {
                                   val currentPosMs = videoView.currentPosition
@@ -670,27 +757,28 @@ jobs:
                           if (chunkFile.exists() && chunkFile.length() > 500) {
                               try {
                                   runOnUiThread {
-                                      statusText.text = "Recognizing dialogue (Part $currentChunkNum)..."
+                                      statusText.text = "Recognizing audio (Part $currentChunkNum)..."
                                   }
 
                                   val recognizedText = transcribeAudioWithRetry(chunkFile, groqApiKey)
 
                                   if (recognizedText.isNotBlank()) {
                                       runOnUiThread {
-                                          statusText.text = "Dubbing to $targetLangName ($dubStyleKey)..."
+                                          statusText.text = "Dubbing into $targetLangName ($activeModel)..."
                                       }
 
                                       val dubbedText = translateWithRetry(recognizedText, targetLangName, dubStyleKey, activeModel, groqApiKey)
 
                                       runOnUiThread {
                                           processedSegments++
+                                          saveCurrentPosition()
                                           if (chunkIndex == 0 && !videoView.isPlaying) {
                                               videoView.seekTo(0)
                                               videoView.start()
-                                              statusText.text = "Live Dubbing Active ✓ [$targetLangName]\n\n$dubbedText"
+                                              statusText.text = "Playing ($targetLangName) ✓\n\n$dubbedText"
                                               speakDubbed(dubbedText, true)
                                           } else {
-                                              statusText.text = "Dubbing Part $currentChunkNum ($targetLangName) ✓\n\n$dubbedText"
+                                              statusText.text = "Playing (Part $currentChunkNum) ✓\n\n$dubbedText"
                                               speakDubbed(dubbedText, false)
                                           }
                                       }
@@ -699,12 +787,12 @@ jobs:
                                           runOnUiThread {
                                               videoView.seekTo(0)
                                               videoView.start()
-                                              statusText.text = "Playing (Detecting dialogues...)"
+                                              statusText.text = "Playing (Listening for dialogue...)"
                                           }
                                       }
                                   }
                               } catch (e: Exception) {
-                                  showError("Part $currentChunkNum Error: ${e.localizedMessage}")
+                                  showError("Part $currentChunkNum: ${e.localizedMessage}")
                                   isProcessing.set(false)
                                   break
                               } finally {
@@ -757,7 +845,7 @@ jobs:
                           }
                       }
                   }
-                  throw Exception("Whisper rate limit. Please wait a few seconds.")
+                  throw Exception("Whisper rate limit. Please wait 3 seconds.")
               }
 
               private fun transcribeAudio(audioFile: File, apiKey: String): String {
@@ -828,7 +916,7 @@ jobs:
                           }
                       }
                   }
-                  throw Exception("Translation limit. Retrying...")
+                  throw Exception("Translation rate limit. Retrying...")
               }
 
               private fun translateToLang(sourceText: String, targetLang: String, style: String, modelName: String, apiKey: String): String {
@@ -844,9 +932,9 @@ jobs:
                   }
 
                   val systemPrompt = if (style == "emotional") {
-                      "You are a professional anime, comic and movie voice dubber. Translate the dialogue into natural, highly expressive spoken $targetLang with human emotion. Use pauses (...) and commas (,) naturally. Keep the translation concise, punchy and tight so it finishes speaking within the video tempo. Output ONLY the translated sentence in the script of $targetLang. No notes or explanations."
+                      "You are a professional anime, comic and movie voice dubber. Translate the dialogue into natural, highly expressive spoken $targetLang with human emotion. Use natural conversational phrases, pauses (...) and commas (,) naturally. Keep sentences tight and punchy. Output ONLY the translated text in the script of $targetLang. No notes or explanations."
                   } else {
-                      "You are a precise textbook translator. Translate the dialogue into formal, grammatically strict, and literal $targetLang. Keep sentences concise so they finish speaking on time. Output ONLY the translated sentence in the script of $targetLang. No notes or extra text."
+                      "You are a textbook translator. Translate the dialogue into formal, grammatically strict, and literal $targetLang. Keep sentences concise. Output ONLY the translated text in the script of $targetLang. No notes or extra text."
                   }
 
                   val payload = JSONObject().apply {
@@ -877,7 +965,13 @@ jobs:
                   }
               }
 
+              override fun onPause() {
+                  saveCurrentPosition()
+                  super.onPause()
+              }
+
               override fun onDestroy() {
+                  saveCurrentPosition()
                   isProcessing.set(false)
                   tts?.stop()
                   tts?.shutdown()
@@ -887,7 +981,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity updated with Realistic Hardware Voices and 1.10x Pacing"
+          echo "MainActivity successfully updated with strict free Meta whitelist"
 
       - name: Build Debug APK
         run: |
@@ -902,5 +996,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-RealisticVoices-apk
+          name: HindiDubPlayer-FinalPro-apk
           path: "**/build/outputs/apk/debug/*.apk"

@@ -253,7 +253,6 @@ jobs:
               private var currentlyPlayingSegment: TimestampDubSegment? = null
 
               private val recentSpokenTexts = ConcurrentLinkedQueue<Pair<String, Long>>()
-              private var lastSpokenDialogueText = ""
               private var lastSpeechEndTimeMs = 0L
               private val isSpeechActive = AtomicBoolean(false)
 
@@ -334,13 +333,11 @@ jobs:
                   audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                   maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
 
-                  // Notch & Cutout Handling for Modern Android
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                       window.attributes.layoutInDisplayCutoutMode =
                           WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
                   }
 
-                  // Prefer Google Speech Engine for Studio Quality Voice
                   try {
                       tts = TextToSpeech(this, this, "com.google.android.tts")
                   } catch (_: Exception) {
@@ -368,7 +365,6 @@ jobs:
                       )
                   }
 
-                  // Adaptive 16:9 Video Container
                   val displayMetrics = resources.displayMetrics
                   val screenWidth = displayMetrics.widthPixels
                   val computedHeight = ((screenWidth * 9) / 16).coerceIn(dpToPx(210), dpToPx(260))
@@ -636,9 +632,7 @@ jobs:
 
                   setContentView(rootFrame)
 
-                  // Automatic Phone Status Bar & Insets Listener
                   setupWindowInsetsAdapter()
-
                   setupSeekBarListeners()
                   setupVlcGestures()
 
@@ -1337,7 +1331,6 @@ jobs:
                   }
               }
 
-              // Studio Natural HD Voice Selection
               private fun applyCharacterVoice(speakerType: String) {
                   try {
                       val voices = tts?.voices ?: emptySet()
@@ -1381,7 +1374,6 @@ jobs:
                           tts?.voice = bestVoice
                       }
 
-                      // Natural Pitch and Tone (No Robotic Pitch Distortion)
                       var naturalPitch = 1.0f
                       var naturalRate = 1.02f
 
@@ -1554,7 +1546,6 @@ jobs:
                   }.start()
               }
 
-              // Anti-Repeat Consumer Loop
               private fun startTimestampConsumerLoop() {
                   uiHandler.postDelayed(object : Runnable {
                       override fun run() {
@@ -1571,7 +1562,6 @@ jobs:
                                           if (curPos <= segment.endMs + 3500L) {
                                               val normText = segment.translatedText.trim().lowercase()
 
-                                              // Stop Repeated Sentence Loops
                                               val isRecentlySpoken = recentSpokenTexts.any {
                                                   (it.first == normText || calculateSimilarity(it.first, normText) > 0.8) &&
                                                   (now - it.second < 12000L)
@@ -1593,7 +1583,6 @@ jobs:
                                                   recentSpokenTexts.add(normText to now)
                                                   while (recentSpokenTexts.size > 8) recentSpokenTexts.poll()
 
-                                                  lastSpokenDialogueText = normText
                                                   speakDubbed(segment.translatedText, segment.speakerType)
                                               }
                                               break
@@ -1989,18 +1978,46 @@ jobs:
                   return segmentsList
               }
 
+              private fun buildMasterSystemPrompt(targetLang: String, style: String): String {
+                  return """
+                  You are a master anime, movie, and web series dubbing director. Translate the input array of dialogues into natural, expressive, conversational $targetLang in native Devanagari script.
+
+                  CRITICAL DUBBING & GRAMMAR RULES:
+                  1. STRICT GENDER-VERB AGREEMENT (लिंग भेद का कड़ाई से पालन):
+                     - Accurately identify each speaker's character & role: 'man', 'woman', 'boy', or 'girl'.
+                     - If speaker is 'woman' or 'girl': First-person verbs and adjectives MUST be strictly FEMININE (e.g., 'करती हूँ', 'जा रही हूँ', 'सोचती हूँ', 'मेरी', 'आई हूँ', 'बताऊँगी', 'खुश हूँ'). NEVER use masculine verbs like 'करता हूँ' or 'जा रहा हूँ' for female characters!
+                     - If speaker is 'man' or 'boy': First-person verbs MUST be strictly MASCULINE (e.g., 'करता हूँ', 'जा रहा हूँ', 'सोचता हूँ', 'मेरा', 'आया हूँ', 'बताऊँगा'). NEVER use 'करती हूँ' for male characters!
+
+                  2. NATURAL CONVERSATION & LOANWORDS (स्वाभाविक बोलचाल):
+                     - Do NOT translate common everyday modern words into archaic or textbook Sanskrit/Hindi!
+                     - Keep commonly spoken modern loanwords as natural Devanagari words:
+                       * Write 'डॉक्टर' (NEVER 'चिकित्सक')
+                       * Write 'पुलिस' (NEVER 'आरक्षी')
+                       * Write 'कार', 'बस', 'ट्रेन', 'स्टेशन', 'स्कूल', 'कॉलेज', 'फोन', 'कॉल', 'मैसेज', 'सर', 'मैडम', 'बॉस', 'टीम', 'कैप्टन', 'मिशन', 'प्लान', 'प्रॉब्लम', 'टेंशन', 'आइडिया', 'चांस', 'ओके', 'सॉरी', 'थैंक यू', 'प्लीज', 'गिफ्ट', 'पार्टी'.
+                     - The dialogue MUST sound like authentic cinema/anime dubbing, not a written translation.
+
+                  3. NO PUNCTUATION ARTIFACTS:
+                     - NEVER output English dots (.), commas (,), semicolons (;), colons (:), or ellipsis (...). The TTS vocalizes them as 'dot' or 'comma'!
+                     - Use ONLY the Devanagari purna viram (।) to mark pauses or ends of sentences.
+                     - Write all abbreviations in full spoken Devanagari (write 'डॉक्टर' not 'Dr.', 'मिस्टर' not 'Mr.').
+
+                  4. CONTEXTUAL & IDIOMATIC ACCURACY:
+                     - Translate the true emotional tone, sarcasm, fear, or urgency of the dialogue. Avoid literal word-for-word translation.
+
+                  OUTPUT FORMAT:
+                  Output ONLY a valid JSON array of objects:
+                  [{"text": "स्वाभाविक संवाद।", "speaker": "woman"}]
+                  No explanation, no markdown backticks.
+                  """.trimIndent()
+              }
+
               private fun batchTranslateDialogues(texts: List<String>, targetLang: String, style: String, apiKey: String): List<Pair<String, String>> {
                   if (texts.isEmpty()) return emptyList()
 
                   val jsonInput = JSONArray()
                   texts.forEach { jsonInput.put(it) }
 
-                  val prompt = if (style == "emotional") {
-                      "You are a master anime and movie dubber. Translate this JSON array of dialogue strings into expressive spoken $targetLang in native script. Also analyze the dialogue and speaker role/gender to classify the speaker into: 'man', 'woman', 'boy', or 'girl'. Output ONLY a valid JSON array of objects: [{\"text\": \"अनुवाद\", \"speaker\": \"woman\"}]. No notes or explanations."
-                  } else {
-                      "Translate this JSON array of dialogue strings into formal $targetLang in native script. Classify each speaker into: 'man', 'woman', 'boy', or 'girl'. Output ONLY a valid JSON array of objects: [{\"text\": \"अनुवाद\", \"speaker\": \"man\"}]."
-                  }
-
+                  val prompt = buildMasterSystemPrompt(targetLang, style)
                   val model = activeLockedModel ?: "llama-3.1-8b-instant"
 
                   try {
@@ -2069,7 +2086,7 @@ jobs:
                       if (!modelsToTry.contains(it)) modelsToTry.add(it)
                   }
 
-                  val systemPrompt = "Translate spoken dialogue into $targetLang and detect speaker role: 'man', 'woman', 'boy', or 'girl'. Output ONLY JSON: {\"text\": \"...\", \"speaker\": \"...\"}"
+                  val systemPrompt = buildMasterSystemPrompt(targetLang, style)
 
                   for (model in modelsToTry) {
                       try {
@@ -2093,7 +2110,7 @@ jobs:
                                   })
                                   put(JSONObject().apply {
                                       put("role", "user")
-                                      put("content", sourceText)
+                                      put("content", "[\"$sourceText\"]")
                                   })
                               }
                               put("messages", messages)
@@ -2106,10 +2123,22 @@ jobs:
                           if (conn.responseCode == 200) {
                               val res = conn.inputStream.bufferedReader().use { it.readText() }
                               val output = JSONObject(res).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
-                              val clean = if (output.contains("{")) output.substring(output.indexOf("{"), output.lastIndexOf("}") + 1) else output
-                              val obj = JSONObject(clean)
-                              activeLockedModel = model
-                              return obj.optString("text", output) to obj.optString("speaker", "man").lowercase()
+                              val clean = if (output.contains("[")) output.substring(output.indexOf("["), output.lastIndexOf("]") + 1)
+                                           else if (output.contains("{")) output.substring(output.indexOf("{"), output.lastIndexOf("}") + 1)
+                                           else output
+
+                              if (clean.startsWith("[")) {
+                                  val arr = JSONArray(clean)
+                                  if (arr.length() > 0) {
+                                      val obj = arr.getJSONObject(0)
+                                      activeLockedModel = model
+                                      return obj.optString("text", sourceText) to obj.optString("speaker", "man").lowercase()
+                                  }
+                              } else if (clean.startsWith("{")) {
+                                  val obj = JSONObject(clean)
+                                  activeLockedModel = model
+                                  return obj.optString("text", output) to obj.optString("speaker", "man").lowercase()
+                              }
                           }
                       } catch (_: Exception) {}
                   }
@@ -2137,13 +2166,42 @@ jobs:
 
               private fun cleanTextForDubbing(text: String, langCode: String): String {
                   var res = text.trim()
-                  res = res.replace(Regex("[*\"#_]"), "")
 
-                  if (langCode == "hi") {
-                      res = res.replace(Regex("[a-zA-Z]"), "")
-                      res = res.replace(Regex("[\u0600-\u06FF]"), "")
-                  }
-                  return res.trim()
+                  res = res.replace(Regex("[*\"#_`~]"), " ")
+
+                  res = res.replace(Regex("(?i)\\b(dr|dr\\.)\\b"), "डॉक्टर")
+                  res = res.replace(Regex("(?i)\\b(mr|mr\\.)\\b"), "मिस्टर")
+                  res = res.replace(Regex("(?i)\\b(mrs|mrs\\.)\\b"), "मिसेज")
+                  res = res.replace(Regex("(?i)\\b(ms|ms\\.)\\b"), "मिस")
+                  res = res.replace(Regex("(?i)\\b(ok|okay)\\b"), "ओके")
+                  res = res.replace(Regex("(?i)\\b(sir)\\b"), "सर")
+
+                  res = res.replace("...", " ")
+                  res = res.replace("..", " ")
+                  res = res.replace(".", "। ")
+                  res = res.replace(",", " ")
+                  res = res.replace(";", " ")
+                  res = res.replace(":", " ")
+                  res = res.replace("!", "। ")
+                  res = res.replace("?", "। ")
+                  res = res.replace("-", " ")
+                  res = res.replace("—", " ")
+                  res = res.replace("/", " ")
+                  res = res.replace("\\", " ")
+                  res = res.replace("(", " ")
+                  res = res.replace(")", " ")
+                  res = res.replace("[", " ")
+                  res = res.replace("]", " ")
+                  res = res.replace("{", " ")
+                  res = res.replace("}", " ")
+
+                  res = res.replace(Regex("(?i)\\b(dot|comma|point|dash|full stop|semicolon|colon)\\b"), " ")
+                  res = res.replace(Regex("\\b(डॉट|कॉमा|पॉइंट|डैश|फुल स्टॉप)\\b"), " ")
+
+                  res = res.replace(Regex("।+"), "।")
+                  res = res.replace(Regex("\\s+"), " ").trim()
+
+                  return res
               }
 
               private fun speakDubbed(text: String, speakerType: String) {
@@ -2174,7 +2232,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity rewritten with Anti-Repeat System, Studio HD Voice, and Adaptive Insets"
+          echo "MainActivity successfully updated with Gender Grammar & Natural Loanwords Dubbing"
 
       - name: Build Debug APK
         run: |
@@ -2189,5 +2247,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-StudioAdaptive-apk
+          name: HindiDubPlayer-StudioVoice-apk
           path: "**/build/outputs/apk/debug/*.apk"

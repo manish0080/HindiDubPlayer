@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Clean Masterpiece Code without Feedback
+      - name: Inject Clean and Fully Structured MainActivity
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -250,7 +250,6 @@ jobs:
               private lateinit var playerPlayPauseBtn: Button
               private lateinit var switchHindiDub: Switch
               private lateinit var switchOriginalMute: Switch
-              private lateinit var switchAudioStreamExtract: Switch
               private lateinit var volumeSeekBar: SeekBar
               private lateinit var volumePercentText: TextView
 
@@ -297,7 +296,6 @@ jobs:
               private var isHindiDubEnabled = true
               private var isOriginalMuted = true
               private var isDebugLoggingEnabled = false
-              private var isAudioStreamExtractForced = true
 
               private var cachedMaleVoice: Voice? = null
               private var cachedFemaleVoice: Voice? = null
@@ -321,7 +319,7 @@ jobs:
 
               private val voiceNames = arrayOf(
                   "🎭 Auto (पात्र अनुसार)",
-                  "🎙️️ Man (कड़क मर्द)",
+                  "🎙️ Man (कड़क मर्द)",
                   "🎙️ Woman (महिला)",
                   "🎙️ Boy (लड़का)",
                   "🎙️ Girl (लड़की)"
@@ -359,7 +357,6 @@ jobs:
                   voiceTypeIndex = prefs.getInt("VOICE_INDEX", 0)
                   currentPlaybackSpeed = prefs.getFloat("PLAY_SPEED", 1.0f)
                   isDebugLoggingEnabled = prefs.getBoolean("DEBUG_LOG", false)
-                  isAudioStreamExtractForced = prefs.getBoolean("FORCE_AUDIO_STREAM", true)
 
                   try {
                       tts = TextToSpeech(this, this, "com.google.android.tts")
@@ -453,6 +450,50 @@ jobs:
                       uiHandler.post {
                           Toast.makeText(this, "🐛 [DEBUG]: $msg", Toast.LENGTH_LONG).show()
                       }
+                  }
+              }
+
+              private fun showScreen(index: Int) {
+                  activeTab = index
+                  viewHome.visibility = if (index == 0) View.VISIBLE else View.GONE
+                  viewBrowser.visibility = if (index == 1) View.VISIBLE else View.GONE
+                  viewPlayer.visibility = if (index == 2) View.VISIBLE else View.GONE
+                  viewSettings.visibility = if (index == 3) View.VISIBLE else View.GONE
+                  viewHistory.visibility = if (index == 4) View.VISIBLE else View.GONE
+
+                  if (index == 1) {
+                      populateDeviceVideos()
+                  } else if (index == 4) {
+                      populateRealHistory()
+                  }
+
+                  bottomNavBar.visibility = if (index == 2) View.GONE else View.VISIBLE
+
+                  navLabelHome.setTextColor(if (index == 0) Color.parseColor("#3860F5") else Color.parseColor("#8A98A8"))
+                  navLabelVideos.setTextColor(if (index == 1) Color.parseColor("#3860F5") else Color.parseColor("#8A98A8"))
+                  navLabelHistory.setTextColor(if (index == 4) Color.parseColor("#3860F5") else Color.parseColor("#8A98A8"))
+              }
+
+              private fun toggleFullscreen() {
+                  isFullscreen = !isFullscreen
+                  if (isFullscreen) {
+                      requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                      window.decorView.systemUiVisibility = (
+                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                          or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                          or View.SYSTEM_UI_FLAG_FULLSCREEN
+                      )
+                      playerContainer.layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.MATCH_PARENT
+                      )
+                  } else {
+                      requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                      window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+                      playerContainer.layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          dpToPx(210)
+                      )
                   }
               }
 
@@ -590,7 +631,7 @@ jobs:
                   gridLayout.addView(createGridItem("📁", "फ़ाइल ब्राउज़ करें", "(फ़ोन से)") { showScreen(1) })
                   gridLayout.addView(createGridItem("🕒", "Recent Videos", "(हाल के वीडियो)") { showScreen(4) })
                   gridLayout.addView(createGridItem("⚡", "प्लेबैक स्पीड", "(${currentPlaybackSpeed}x गति)") { showSpeedDialog() })
-                  gridLayout.addView(createGridItem("⚙", "सेटिंग्स", "(भाषा, ऑडियो आदि)") { showScreen(3) })
+                  gridLayout.addView(createGridItem("⚙️", "सेटिंग्स", "(भाषा, ऑडियो आदि)") { showScreen(3) })
 
                   viewHome.addView(gridLayout)
               }
@@ -983,7 +1024,7 @@ jobs:
                   }
 
                   val audioHeader = TextView(this).apply {
-                      text = "🔊 Audio Settings & Transcription"
+                      text = "🔊 Audio Settings"
                       textSize = 13f
                       setTypeface(null, Typeface.BOLD)
                       setTextColor(Color.WHITE)
@@ -1023,7 +1064,7 @@ jobs:
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(8)
+                          bottomMargin = dpToPx(10)
                       }
                       layoutParams = p
                   }
@@ -1043,34 +1084,6 @@ jobs:
                   }
                   rowMute.addView(switchOriginalMute)
                   audioCard.addView(rowMute)
-
-                  val rowExtract = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
-                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(10)
-                      }
-                      layoutParams = p
-                  }
-                  val txtExtract = TextView(this).apply {
-                      text = "English Audio Transcription Stream (Force)"
-                      textSize = 12f
-                      setTextColor(Color.parseColor("#00E5FF"))
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                  }
-                  rowExtract.addView(txtExtract)
-                  switchAudioStreamExtract = Switch(this).apply {
-                      isChecked = isAudioStreamExtractForced
-                      setOnCheckedChangeListener { _, checked ->
-                          isAudioStreamExtractForced = checked
-                          getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
-                              .putBoolean("FORCE_AUDIO_STREAM", checked)
-                              .apply()
-                          Toast.makeText(this@MainActivity, if (checked) "🎧 Audio Stream Forced On" else "🎧 Auto Stream Mode", Toast.LENGTH_SHORT).show()
-                      }
-                  }
-                  rowExtract.addView(switchAudioStreamExtract)
-                  audioCard.addView(rowExtract)
 
                   val volLabel = TextView(this).apply {
                       text = "Hindi Volume"
@@ -1182,37 +1195,6 @@ jobs:
                       showSpeedDialog()
                   })
 
-                  container.addView(createSectionHeader("ऐप डिबग एवं सपोर्ट"))
-                  val debugRow = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
-                      background = createCardDrawable(Color.WHITE, Color.parseColor("#EBF0F8"), dpToPx(12).toFloat(), dpToPx(1))
-                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(14))
-                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(8)
-                      }
-                      layoutParams = p
-                  }
-                  val debugLabel = TextView(this).apply {
-                      text = "🐛 Debug Error Logs (एरर लॉग्स)"
-                      textSize = 14f
-                      setTextColor(Color.parseColor("#222C3D"))
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                  }
-                  debugRow.addView(debugLabel)
-                  switchDebugLog = Switch(this).apply {
-                      isChecked = isDebugLoggingEnabled
-                      setOnCheckedChangeListener { _, checked ->
-                          isDebugLoggingEnabled = checked
-                          getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
-                              .putBoolean("DEBUG_LOG", checked)
-                              .apply()
-                          Toast.makeText(this@MainActivity, if (checked) "🐛 Debug Mode On" else "🐛 Debug Mode Off", Toast.LENGTH_SHORT).show()
-                      }
-                  }
-                  debugRow.addView(switchDebugLog)
-                  container.addView(debugRow)
-
                   container.addView(createSectionHeader("ऐप सेटिंग"))
                   settingCacheVal = TextView(this)
                   container.addView(createSettingItem("कैश साफ़ करें", "${sessionCacheMap.size} Dialogues ›", settingCacheVal) {
@@ -1222,8 +1204,8 @@ jobs:
                       Toast.makeText(this, "कैश साफ़ कर दिया गया", Toast.LENGTH_SHORT).show()
                   })
 
-                  container.addView(createSettingItem("हमसे संपर्क करें", "फ़ीडबैक / सपोर्ट ›", TextView(this)) {
-                      Toast.makeText(this, "Hindi Dub Player v4.6 • Cleaned Edition", Toast.LENGTH_LONG).show()
+                  container.addView(createSettingItem("हमसे संपर्क करें", "हिंदी डब प्लेयर v4.7 ›", TextView(this)) {
+                      Toast.makeText(this, "Hindi Dub Player v4.7 • Clean & Stable", Toast.LENGTH_LONG).show()
                   })
 
                   viewSettings.addView(container)
@@ -1516,6 +1498,145 @@ jobs:
                       .show()
               }
 
+              private fun createSectionHeader(title: String): TextView {
+                  return TextView(this).apply {
+                      text = title
+                      textSize = 13f
+                      setTypeface(null, Typeface.BOLD)
+                      setTextColor(Color.parseColor("#7B899C"))
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          topMargin = dpToPx(14)
+                          bottomMargin = dpToPx(8)
+                      }
+                      layoutParams = p
+                  }
+              }
+
+              private fun createSettingItem(label: String, value: String, valView: TextView, onClick: () -> Unit): LinearLayout {
+                  return LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      background = createCardDrawable(Color.WHITE, Color.parseColor("#EBF0F8"), dpToPx(12).toFloat(), dpToPx(1))
+                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(14))
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          bottomMargin = dpToPx(8)
+                      }
+                      layoutParams = p
+                      setOnClickListener { onClick() }
+
+                      val lbl = TextView(this@MainActivity).apply {
+                          text = label
+                          textSize = 14f
+                          setTextColor(Color.parseColor("#222C3D"))
+                          layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      }
+                      addView(lbl)
+
+                      valView.apply {
+                          text = value
+                          textSize = 13f
+                          setTextColor(Color.parseColor("#3860F5"))
+                          setTypeface(null, Typeface.BOLD)
+                      }
+                      addView(valView)
+                  }
+              }
+
+              private fun createHistoryItem(name: String, time: String, onPlayClick: () -> Unit): LinearLayout {
+                  return LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      background = createCardDrawable(Color.WHITE, Color.parseColor("#EBF0F8"), dpToPx(14).toFloat(), dpToPx(1))
+                      setPadding(dpToPx(12), dpToPx(10), dpToPx(12), dpToPx(10))
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          bottomMargin = dpToPx(10)
+                      }
+                      layoutParams = p
+
+                      val icon = TextView(this@MainActivity).apply {
+                          text = "🎬"
+                          textSize = 24f
+                          setPadding(0, 0, dpToPx(12), 0)
+                      }
+                      addView(icon)
+
+                      val col = LinearLayout(this@MainActivity).apply {
+                          orientation = LinearLayout.VERTICAL
+                          layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      }
+                      val title = TextView(this@MainActivity).apply {
+                          text = name
+                          textSize = 14f
+                          setTypeface(null, Typeface.BOLD)
+                          setTextColor(Color.parseColor("#222C3D"))
+                      }
+                      col.addView(title)
+                      val sub = TextView(this@MainActivity).apply {
+                          text = time
+                          textSize = 11f
+                          setTextColor(Color.parseColor("#8E9DAE"))
+                      }
+                      col.addView(sub)
+                      addView(col)
+
+                      val playBtn = TextView(this@MainActivity).apply {
+                          text = "▶"
+                          textSize = 16f
+                          setTextColor(Color.parseColor("#3860F5"))
+                          setPadding(dpToPx(10), dpToPx(4), dpToPx(10), dpToPx(4))
+                      }
+                      addView(playBtn)
+                      setOnClickListener { onPlayClick() }
+                  }
+              }
+
+              private fun buildBottomNavigation() {
+                  bottomNavBar = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setBackgroundColor(Color.WHITE)
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(66))
+                      layoutParams = p
+                      weightSum = 3f
+                      elevation = dpToPx(8).toFloat()
+                  }
+
+                  navItemHome = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+                      setOnClickListener { showScreen(0) }
+                  }
+                  val iconHome = TextView(this).apply { text = "🏠"; textSize = 19f; gravity = Gravity.CENTER }
+                  navLabelHome = TextView(this).apply { text = "होम"; textSize = 11f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor("#3860F5")) }
+                  navItemHome.addView(iconHome)
+                  navItemHome.addView(navLabelHome)
+                  bottomNavBar.addView(navItemHome)
+
+                  navItemHistory = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+                      setOnClickListener { showScreen(4) }
+                  }
+                  val iconHistory = TextView(this).apply { text = "🕒"; textSize = 19f; gravity = Gravity.CENTER }
+                  navLabelHistory = TextView(this).apply { text = "इतिहास"; textSize = 11f; gravity = Gravity.CENTER; setTextColor(Color.parseColor("#8A98A8")) }
+                  navItemHistory.addView(iconHistory)
+                  navItemHistory.addView(navLabelHistory)
+                  bottomNavBar.addView(navItemHistory)
+
+                  navItemVideos = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+                      setOnClickListener { showScreen(1) }
+                  }
+                  val iconVideos = TextView(this).apply { text = "🔖"; textSize = 19f; gravity = Gravity.CENTER }
+                  navLabelVideos = TextView(this).apply { text = "मेरे वीडियो"; textSize = 11f; gravity = Gravity.CENTER; setTextColor(Color.parseColor("#8A98A8")) }
+                  navItemVideos.addView(iconVideos)
+                  navItemVideos.addView(navLabelVideos)
+                  bottomNavBar.addView(navItemVideos)
+              }
+
               override fun onInit(initStatus: Int) {
                   if (initStatus == TextToSpeech.SUCCESS) {
                       tts?.setLanguage(Locale(targetLangCode, "IN"))
@@ -1595,7 +1716,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten without feedback code."
+          echo "MainActivity successfully structured with zero unresolved references."
 
       - name: Build Debug APK
         run: |
@@ -1610,5 +1731,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-CleanBuild-apk
+          name: HindiDubPlayer-CleanFixed-apk
           path: "**/build/outputs/apk/debug/*.apk"

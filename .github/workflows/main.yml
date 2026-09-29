@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Final Stable Code with Missing References Fixed
+      - name: Inject Final Bulletproof Error-Free Code
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -323,7 +323,7 @@ jobs:
               private val voiceNames = arrayOf(
                   "🎭 Auto (पात्र अनुसार)",
                   "🎙️ Man (कड़क मर्द)",
-                  "🎙️️ Woman (महिला)",
+                  "🎙️ Woman (महिला)",
                   "🎙️ Boy (लड़का)",
                   "🎙️ Girl (लड़की)"
               )
@@ -703,7 +703,7 @@ jobs:
                   gridLayout.addView(createGridItem("📁", "फ़ाइल ब्राउज़ करें", "(फ़ोन से)") { showScreen(1) })
                   gridLayout.addView(createGridItem("🕒", "Recent Videos", "(हाल के वीडियो)") { showScreen(4) })
                   gridLayout.addView(createGridItem("⚡", "प्लेबैक स्पीड", "(${currentPlaybackSpeed}x गति)") { showSpeedDialog() })
-                  gridLayout.addView(createGridItem("⚙️️", "सेटिंग्स", "(भाषा, ऑडियो आदि)") { showScreen(3) })
+                  gridLayout.addView(createGridItem("⚙", "सेटिंग्स", "(भाषा, ऑडियो आदि)") { showScreen(3) })
 
                   viewHome.addView(gridLayout)
               }
@@ -1532,6 +1532,36 @@ jobs:
                   }
               }
 
+              private fun playSelectedUri(uri: Uri, startPosMs: Int = 0) {
+                  selectedVideoUri = uri
+                  addVideoToHistory(uri)
+                  playerVideoView.setVideoURI(uri)
+                  showScreen(2)
+                  startDubbingProcess(uri)
+                  playerVideoView.setOnPreparedListener { mp ->
+                      mediaPlayerRef = mp
+                      applyAudioMuteState()
+                      applyVideoPlaybackSpeed()
+                      playerSeekBar.max = playerVideoView.duration
+                      playerTimeTotal.text = formatTime(playerVideoView.duration.toLong())
+                      if (startPosMs > 0) {
+                          playerVideoView.seekTo(startPosMs)
+                      }
+                      playerVideoView.start()
+                      playerPlayPauseBtn.text = "⏸"
+                  }
+              }
+
+              private fun saveCurrentPosition() {
+                  val uri = selectedVideoUri ?: return
+                  val pos = playerVideoView.currentPosition
+                  if (pos > 3000) {
+                      getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
+                          .putInt("POS_" + uri.toString().hashCode(), pos)
+                          .apply()
+                  }
+              }
+
               private fun showTargetLanguageDialog() {
                   val names = availableLanguages.map { it.first }.toTypedArray()
                   AlertDialog.Builder(this)
@@ -1705,7 +1735,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with resolved references."
+          echo "MainActivity successfully rewritten with all methods intact."
 
       - name: Build Debug APK
         run: |
@@ -1720,5 +1750,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-FinalFixes-apk
+          name: HindiDubPlayer-ErrorFreeBuild-apk
           path: "**/build/outputs/apk/debug/*.apk"

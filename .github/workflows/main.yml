@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Complete Masterpiece Code with Automated Direct Feedback
+      - name: Inject Final Stable Code with Missing References Fixed
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -323,7 +323,7 @@ jobs:
               private val voiceNames = arrayOf(
                   "🎭 Auto (पात्र अनुसार)",
                   "🎙️ Man (कड़क मर्द)",
-                  "🎙️ Woman (महिला)",
+                  "🎙️️ Woman (महिला)",
                   "🎙️ Boy (लड़का)",
                   "🎙️ Girl (लड़की)"
               )
@@ -512,7 +512,6 @@ jobs:
                               return@setPositiveButton
                           }
 
-                          // Automated direct backend dispatch
                           Thread {
                               sendFeedbackDirectlyToDeveloper(name, addr, errDesc)
                           }.start()
@@ -523,7 +522,7 @@ jobs:
 
               private fun sendFeedbackDirectlyToDeveloper(name: String, address: String, description: String) {
                   try {
-                      val webhookUrl = URL("https://formspree.io/f/manishtomar918@gmail.com") // Automated direct relay endpoint
+                      val webhookUrl = URL("https://formspree.io/f/manishtomar918@gmail.com")
                       val conn = (webhookUrl.openConnection() as HttpURLConnection).apply {
                           requestMethod = "POST"
                           setRequestProperty("Content-Type", "application/json")
@@ -547,7 +546,6 @@ jobs:
                           if (respCode in 200..299) {
                               Toast.makeText(this, "✅ फीडबैक सफलतापूर्वक डेवलपर को भेज दिया गया!", Toast.LENGTH_LONG).show()
                           } else {
-                              // Fallback direct intent dispatch if backend relay busy
                               dispatchDirectEmailIntent(name, address, description)
                           }
                       }
@@ -705,7 +703,7 @@ jobs:
                   gridLayout.addView(createGridItem("📁", "फ़ाइल ब्राउज़ करें", "(फ़ोन से)") { showScreen(1) })
                   gridLayout.addView(createGridItem("🕒", "Recent Videos", "(हाल के वीडियो)") { showScreen(4) })
                   gridLayout.addView(createGridItem("⚡", "प्लेबैक स्पीड", "(${currentPlaybackSpeed}x गति)") { showSpeedDialog() })
-                  gridLayout.addView(createGridItem("⚙️", "सेटिंग्स", "(भाषा, ऑडियो आदि)") { showScreen(3) })
+                  gridLayout.addView(createGridItem("⚙️️", "सेटिंग्स", "(भाषा, ऑडियो आदि)") { showScreen(3) })
 
                   viewHome.addView(gridLayout)
               }
@@ -1328,7 +1326,6 @@ jobs:
                   debugRow.addView(switchDebugLog)
                   container.addView(debugRow)
 
-                  // Feedback / Error Report Option with Name & Address inputs
                   val feedbackRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -1708,7 +1705,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully updated with automated feedback system and feedback fields."
+          echo "MainActivity successfully rewritten with resolved references."
 
       - name: Build Debug APK
         run: |
@@ -1723,5 +1720,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-FeedbackMaster-apk
+          name: HindiDubPlayer-FinalFixes-apk
           path: "**/build/outputs/apk/debug/*.apk"

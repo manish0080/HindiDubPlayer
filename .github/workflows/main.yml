@@ -68,8 +68,6 @@ jobs:
           echo "App icon successfully added."
 
       - name: Add Internet Permission & Orientation Config Fix
-
-      - name: Add Internet Permission & Orientation Config Fix
         run: |
           find . -name "AndroidManifest.xml" -exec sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />' {} + || true
           find . -name "AndroidManifest.xml" -exec sed -i 's/<activity /<activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize" /g' {} + || true

@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Complete MainActivity with 50 Percent Music Ducking
+      - name: Inject Complete and Fully Fixed MainActivity
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -177,6 +177,7 @@ jobs:
           import android.speech.tts.Voice
           import android.view.Gravity
           import android.view.View
+          import android.view.WindowInsets
           import android.view.WindowManager
           import android.widget.Button
           import android.widget.FrameLayout
@@ -377,14 +378,7 @@ jobs:
                           FrameLayout.LayoutParams.MATCH_PARENT,
                           FrameLayout.LayoutParams.MATCH_PARENT
                       )
-                  }
-
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                      mainLayout.setOnApplyWindowInsetsListener { v, insets ->
-                          val statusBarHeight = insets.getInsets(WindowInsets.Type.statusBars()).top
-                          v.setPadding(0, statusBarHeight, 0, 0)
-                          insets
-                      }
+                      fitsSystemWindows = true
                   }
 
                   screenContainer = FrameLayout(this).apply {
@@ -1001,7 +995,7 @@ jobs:
 
                   val btnRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER
+                      gravity = Gravity.CENTER_VERTICAL
                       setPadding(0, dpToPx(6), 0, dpToPx(6))
                   }
 
@@ -1650,8 +1644,8 @@ jobs:
               }
 
               // SMART 50% AUTO-DUCKING:
-              // When speech is inactive -> original sound plays at 50% (0.5f) volume
-              // When dialogue speaks -> original sound ducks down to 8% (0.08f) so English is suppressed
+              // When speech is inactive -> original sound plays at 50% (0.50f) volume
+              // When dialogue speaks -> original sound ducks down to 8% (0.08f) so English dialogue is suppressed
               private fun applyAudioMuteState() {
                   if (isOriginalMuted) {
                       if (isSpeechActive.get()) {
@@ -2287,11 +2281,11 @@ jobs:
                   try {
                       val url = URL("https://api.groq.com/openai/v1/models")
                       val conn = (url.openConnection() as HttpURLConnection).apply {
-                          requestMethod = "GET"
-                          setRequestProperty("Authorization", "Bearer $apiKey")
-                          connectTimeout = 6000
-                          readTimeout = 6000
-                          doInput = true
+                              requestMethod = "GET"
+                              setRequestProperty("Authorization", "Bearer $apiKey")
+                              connectTimeout = 6000
+                              readTimeout = 6000
+                              doInput = true
                       }
 
                       if (conn.responseCode == 200) {

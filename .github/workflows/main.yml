@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Final Production Grade Code Injection with Auto Model Selector
+      - name: Inject Complete Final Code with Audio Stream Toggle
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -223,7 +223,7 @@ jobs:
 
           class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
-              private val PERMISSION_REQ_CODE = 9003
+              private val PERMISSION_REQ_CODE = 9999
 
               private lateinit var rootContainer: FrameLayout
               private lateinit var screenContainer: FrameLayout
@@ -243,12 +243,14 @@ jobs:
               private lateinit var playerVideoView: VideoView
               private lateinit var playerContainer: FrameLayout
               private lateinit var playerSubtitleText: TextView
+              private lateinit var originalSubtitleText: TextView
               private lateinit var playerSeekBar: SeekBar
               private lateinit var playerTimeCurrent: TextView
               private lateinit var playerTimeTotal: TextView
               private lateinit var playerPlayPauseBtn: Button
               private lateinit var switchHindiDub: Switch
               private lateinit var switchOriginalMute: Switch
+              private lateinit var switchAudioStreamExtract: Switch
               private lateinit var volumeSeekBar: SeekBar
               private lateinit var volumePercentText: TextView
 
@@ -258,6 +260,7 @@ jobs:
               private lateinit var settingVoiceVal: TextView
               private lateinit var settingSpeedVal: TextView
               private lateinit var settingCacheVal: TextView
+              private lateinit var switchDebugLog: Switch
 
               private lateinit var bottomNavBar: LinearLayout
               private lateinit var navItemHome: LinearLayout
@@ -293,6 +296,8 @@ jobs:
               private var currentPlaybackSpeed = 1.0f
               private var isHindiDubEnabled = true
               private var isOriginalMuted = true
+              private var isDebugLoggingEnabled = false
+              private var isAudioStreamExtractForced = true
 
               private var cachedMaleVoice: Voice? = null
               private var cachedFemaleVoice: Voice? = null
@@ -319,7 +324,7 @@ jobs:
                   "🎙️ Man (कड़क मर्द)",
                   "🎙️ Woman (महिला)",
                   "🎙️ Boy (लड़का)",
-                  "🎙️️ Girl (लड़की)"
+                  "🎙️ Girl (लड़की)"
               )
 
               private val styleNames = arrayOf(
@@ -336,7 +341,6 @@ jobs:
                   "2.0x (Double Speed)" to 2.0f
               )
 
-              // User provided Groq API Key securely constructed
               private val groqApiKey = "gsk_ADKCofQLR9ml9Fdxo" + "4A5WGdyb3FYvd9T" + "ERnBwVk1npQboYq3HCEJ"
               private var autoResolvedModel = "llama-3.1-8b-instant"
               private val candidateModels = mutableListOf<String>()
@@ -354,11 +358,13 @@ jobs:
                   dubStyleKey = prefs.getString("DUB_STYLE", "netflix") ?: "netflix"
                   voiceTypeIndex = prefs.getInt("VOICE_INDEX", 0)
                   currentPlaybackSpeed = prefs.getFloat("PLAY_SPEED", 1.0f)
+                  isDebugLoggingEnabled = prefs.getBoolean("DEBUG_LOG", false)
+                  isAudioStreamExtractForced = prefs.getBoolean("FORCE_AUDIO_STREAM", true)
 
                   try {
                       tts = TextToSpeech(this, this, "com.google.android.tts")
-                  } catch (_: Exception) {
-                      tts = TextToSpeech(this, this)
+                  } catch (e: Exception) {
+                      showDebugError("TTS Init Exception: ${e.message}")
                   }
 
                   rootContainer = FrameLayout(this).apply {
@@ -403,9 +409,8 @@ jobs:
                   checkPermissions()
                   showScreen(0)
 
-                  // Background thread to auto-detect best free model in India
                   Thread {
-                      populateAndSelectBestModel(groqApiKey)
+                      fetchAndAutoSelectModel(groqApiKey)
                   }.start()
 
                   playerVideoView.setOnPreparedListener { mp ->
@@ -439,6 +444,14 @@ jobs:
                   }
                   if (needed.isNotEmpty()) {
                       requestPermissions(needed.toTypedArray(), PERMISSION_REQ_CODE)
+                  }
+              }
+
+              private fun showDebugError(msg: String) {
+                  if (isDebugLoggingEnabled) {
+                      uiHandler.post {
+                          Toast.makeText(this, "🐛 [DEBUG]: $msg", Toast.LENGTH_LONG).show()
+                      }
                   }
               }
 
@@ -746,7 +759,7 @@ jobs:
 
                       setOnClickListener {
                           if (uri != null) {
-                              playSelectedUri(uri)
+                              handleVideoSelectionWithResumeCheck(uri)
                           } else {
                               openVideoPicker()
                           }
@@ -788,7 +801,9 @@ jobs:
                               count++
                           }
                       }
-                  } catch (_: Exception) {}
+                  } catch (e: Exception) {
+                      showDebugError("Device Video Query Exception: ${e.message}")
+                  }
                   return list
               }
 
@@ -825,35 +840,47 @@ jobs:
 
                   playerContainer = FrameLayout(this).apply {
                       setBackgroundColor(Color.BLACK)
-                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(225))
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(210))
                   }
 
                   playerVideoView = VideoView(this).apply {
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER)
                   }
                   playerContainer.addView(playerVideoView)
+                  viewPlayer.addView(playerContainer)
 
-                  playerSubtitleText = TextView(this).apply {
-                      textSize = 14f
-                      setTextColor(Color.WHITE)
-                      setTypeface(null, Typeface.BOLD)
+                  // Dual Subtitle Container (Original English on top, Hindi Dub below)
+                  val subtitleContainer = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dpToPx(16), dpToPx(6), dpToPx(16), dpToPx(6))
+                      setBackgroundColor(Color.parseColor("#090A0F"))
+                  }
+
+                  originalSubtitleText = TextView(this).apply {
+                      textSize = 12f
+                      setTextColor(Color.parseColor("#90A4AE"))
                       gravity = Gravity.CENTER
-                      background = createRoundedDrawable(Color.parseColor("#CC000000"), dpToPx(8).toFloat())
-                      setPadding(dpToPx(14), dpToPx(6), dpToPx(14), dpToPx(6))
-                      visibility = View.GONE
-                      val p = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM).apply {
-                          marginStart = dpToPx(20)
-                          marginEnd = dpToPx(20)
-                          bottomMargin = dpToPx(12)
+                      text = "Original English: [Waiting for dialogue...]"
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          bottomMargin = dpToPx(4)
                       }
                       layoutParams = p
                   }
-                  playerContainer.addView(playerSubtitleText)
-                  viewPlayer.addView(playerContainer)
+                  subtitleContainer.addView(originalSubtitleText)
+
+                  playerSubtitleText = TextView(this).apply {
+                      textSize = 15f
+                      setTextColor(Color.parseColor("#00E5FF"))
+                      setTypeface(null, Typeface.BOLD)
+                      gravity = Gravity.CENTER
+                      text = "हिंदी डब: [डबिंग स्ट्रीम यहाँ दिखेगी]"
+                  }
+                  subtitleContainer.addView(playerSubtitleText)
+                  viewPlayer.addView(subtitleContainer)
 
                   val controlSection = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(16))
+                      setPadding(dpToPx(16), dpToPx(6), dpToPx(16), dpToPx(12))
                   }
 
                   val timeRow = LinearLayout(this).apply {
@@ -886,7 +913,7 @@ jobs:
                   val btnRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER
-                      setPadding(0, dpToPx(8), 0, dpToPx(8))
+                      setPadding(0, dpToPx(6), 0, dpToPx(6))
                   }
 
                   val rewBtn = Button(this).apply {
@@ -944,24 +971,25 @@ jobs:
                   controlSection.addView(btnRow)
                   viewPlayer.addView(controlSection)
 
+                  // Audio Settings Card with Original Audio Extraction Stream Toggle
                   val audioCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      background = createCardDrawable(Color.parseColor("#171A24"), Color.parseColor("#252A3A"), dpToPx(16).toFloat(), dpToPx(1))
-                      setPadding(dpToPx(18), dpToPx(18), dpToPx(18), dpToPx(18))
+                      background = createCardDrawable(Color.parseColor("#171A24"), Color.parseColor("#252A3A"), dpToPx(14).toFloat(), dpToPx(1))
+                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(14))
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          marginStart = dpToPx(16)
-                          marginEnd = dpToPx(16)
+                          marginStart = dpToPx(14)
+                          marginEnd = dpToPx(14)
                       }
                       layoutParams = p
                   }
 
                   val audioHeader = TextView(this).apply {
-                      text = "🔊 Audio Settings  ⌃"
-                      textSize = 14f
+                      text = "🔊 Audio Settings & Transcription"
+                      textSize = 13f
                       setTypeface(null, Typeface.BOLD)
                       setTextColor(Color.WHITE)
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(14)
+                          bottomMargin = dpToPx(10)
                       }
                       layoutParams = p
                   }
@@ -971,13 +999,13 @@ jobs:
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(12)
+                          bottomMargin = dpToPx(8)
                       }
                       layoutParams = p
                   }
                   val txtDub = TextView(this).apply {
                       text = "Hindi Dub (Translated Audio)"
-                      textSize = 13f
+                      textSize = 12f
                       setTextColor(Color.parseColor("#E0E6ED"))
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                   }
@@ -996,13 +1024,13 @@ jobs:
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(14)
+                          bottomMargin = dpToPx(8)
                       }
                       layoutParams = p
                   }
                   val txtMute = TextView(this).apply {
                       text = "Original English Audio (Mute)"
-                      textSize = 13f
+                      textSize = 12f
                       setTextColor(Color.parseColor("#E0E6ED"))
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                   }
@@ -1017,9 +1045,37 @@ jobs:
                   rowMute.addView(switchOriginalMute)
                   audioCard.addView(rowMute)
 
+                  val rowExtract = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          bottomMargin = dpToPx(10)
+                      }
+                      layoutParams = p
+                  }
+                  val txtExtract = TextView(this).apply {
+                      text = "English Audio Transcription Stream (Force)"
+                      textSize = 12f
+                      setTextColor(Color.parseColor("#00E5FF"))
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+                  rowExtract.addView(txtExtract)
+                  switchAudioStreamExtract = Switch(this).apply {
+                      isChecked = isAudioStreamExtractForced
+                      setOnCheckedChangeListener { _, checked ->
+                          isAudioStreamExtractForced = checked
+                          getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
+                              .putBoolean("FORCE_AUDIO_STREAM", checked)
+                              .apply()
+                          Toast.makeText(this@MainActivity, if (checked) "🎧 Audio Stream Forced On" else "🎧 Auto Stream Mode", Toast.LENGTH_SHORT).show()
+                      }
+                  }
+                  rowExtract.addView(switchAudioStreamExtract)
+                  audioCard.addView(rowExtract)
+
                   val volLabel = TextView(this).apply {
                       text = "Hindi Volume"
-                      textSize = 12f
+                      textSize = 11f
                       setTextColor(Color.parseColor("#8B99A8"))
                   }
                   audioCard.addView(volLabel)
@@ -1030,7 +1086,7 @@ jobs:
                   }
                   val volIcon = TextView(this).apply {
                       text = "🔈 "
-                      textSize = 14f
+                      textSize = 13f
                   }
                   volRow.addView(volIcon)
 
@@ -1053,7 +1109,7 @@ jobs:
 
                   volumePercentText = TextView(this).apply {
                       text = "100%"
-                      textSize = 12f
+                      textSize = 11f
                       setTextColor(Color.WHITE)
                   }
                   volRow.addView(volumePercentText)
@@ -1127,11 +1183,38 @@ jobs:
                       showSpeedDialog()
                   })
 
-                  container.addView(createSectionHeader("ऐप सेटिंग"))
-                  container.addView(createSettingItem("डिफ़ॉल्ट प्लेयर", "VLC (Recommended) ›", TextView(this)) {
-                      Toast.makeText(this, "Internal VLC-Style Media Engine Active", Toast.LENGTH_SHORT).show()
-                  })
+                  container.addView(createSectionHeader("ऐप डिबग एवं सपोर्ट"))
+                  val debugRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      background = createCardDrawable(Color.WHITE, Color.parseColor("#EBF0F8"), dpToPx(12).toFloat(), dpToPx(1))
+                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(14))
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          bottomMargin = dpToPx(8)
+                      }
+                      layoutParams = p
+                  }
+                  val debugLabel = TextView(this).apply {
+                      text = "🐛 Debug Error Logs (एरर लॉग्स)"
+                      textSize = 14f
+                      setTextColor(Color.parseColor("#222C3D"))
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+                  debugRow.addView(debugLabel)
+                  switchDebugLog = Switch(this).apply {
+                      isChecked = isDebugLoggingEnabled
+                      setOnCheckedChangeListener { _, checked ->
+                          isDebugLoggingEnabled = checked
+                          getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
+                              .putBoolean("DEBUG_LOG", checked)
+                              .apply()
+                          Toast.makeText(this@MainActivity, if (checked) "🐛 Debug Mode On" else "🐛 Debug Mode Off", Toast.LENGTH_SHORT).show()
+                      }
+                  }
+                  debugRow.addView(switchDebugLog)
+                  container.addView(debugRow)
 
+                  container.addView(createSectionHeader("ऐप सेटिंग"))
                   settingCacheVal = TextView(this)
                   container.addView(createSettingItem("कैश साफ़ करें", "${sessionCacheMap.size} Dialogues ›", settingCacheVal) {
                       sessionCacheMap.clear()
@@ -1141,7 +1224,7 @@ jobs:
                   })
 
                   container.addView(createSettingItem("हमसे संपर्क करें", "फ़ीडबैक / सपोर्ट ›", TextView(this)) {
-                      Toast.makeText(this, "Hindi Dub Player v3.4 • Auto Model Selector Active", Toast.LENGTH_LONG).show()
+                      Toast.makeText(this, "Hindi Dub Player v4.1 • Ultimate Masterpiece", Toast.LENGTH_LONG).show()
                   })
 
                   viewSettings.addView(container)
@@ -1264,8 +1347,9 @@ jobs:
                           val row = createHistoryItem(name, time) {
                               try {
                                   val uri = Uri.parse(uriStr)
-                                  playSelectedUri(uri)
-                              } catch (_: Exception) {
+                                  handleVideoSelectionWithResumeCheck(uri)
+                              } catch (e: Exception) {
+                                  showDebugError("History Play Exception: ${e.message}")
                                   Toast.makeText(this, "फ़ाइल नहीं मिल सकी", Toast.LENGTH_SHORT).show()
                               }
                           }
@@ -1285,6 +1369,28 @@ jobs:
                       }
                   } catch (_: Exception) {}
                   return name
+              }
+
+              private fun handleVideoSelectionWithResumeCheck(uri: Uri) {
+                  val prefs = getSharedPreferences("DubSettings", Context.MODE_PRIVATE)
+                  val posKey = "POS_" + uri.toString().hashCode()
+                  val savedPos = prefs.getInt(posKey, 0)
+
+                  if (savedPos > 5000) {
+                      AlertDialog.Builder(this)
+                          .setTitle("Resume Video")
+                          .setMessage("पिछला प्लेबैक ${formatTime(savedPos.toLong())} पर रुका था। क्या आप यहीं से रिज्यूम करना चाहते हैं?")
+                          .setPositiveButton("Resume") { _, _ ->
+                              playSelectedUri(uri, savedPos)
+                          }
+                          .setNegativeButton("Start from beginning") { _, _ ->
+                              playSelectedUri(uri, 0)
+                          }
+                          .setCancelable(true)
+                          .show()
+                  } else {
+                      playSelectedUri(uri, 0)
+                  }
               }
 
               private fun showTargetLanguageDialog() {
@@ -1541,14 +1647,34 @@ jobs:
                   navLabelHistory.setTextColor(if (index == 4) Color.parseColor("#3860F5") else Color.parseColor("#8A98A8"))
               }
 
-              private fun playSelectedUri(uri: Uri) {
+              private fun playSelectedUri(uri: Uri, startPosMs: Int = 0) {
                   selectedVideoUri = uri
                   addVideoToHistory(uri)
                   playerVideoView.setVideoURI(uri)
                   showScreen(2)
                   startDubbingProcess(uri)
-                  playerVideoView.start()
-                  playerPlayPauseBtn.text = "⏸"
+                  playerVideoView.setOnPreparedListener { mp ->
+                      mediaPlayerRef = mp
+                      applyAudioMuteState()
+                      applyVideoPlaybackSpeed()
+                      playerSeekBar.max = playerVideoView.duration
+                      playerTimeTotal.text = formatTime(playerVideoView.duration.toLong())
+                      if (startPosMs > 0) {
+                          playerVideoView.seekTo(startPosMs)
+                      }
+                      playerVideoView.start()
+                      playerPlayPauseBtn.text = "⏸"
+                  }
+              }
+
+              private fun saveCurrentPosition() {
+                  val uri = selectedVideoUri ?: return
+                  val pos = playerVideoView.currentPosition
+                  if (pos > 3000) {
+                      getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
+                          .putInt("POS_" + uri.toString().hashCode(), pos)
+                          .apply()
+                  }
               }
 
               private fun applyAudioMuteState() {
@@ -1567,7 +1693,9 @@ jobs:
                               params.speed = currentPlaybackSpeed
                               mp.playbackParams = params
                           }
-                      } catch (_: Exception) {}
+                      } catch (e: Exception) {
+                          showDebugError("Playback Speed Exception: ${e.message}")
+                      }
                   }
               }
 
@@ -1576,6 +1704,7 @@ jobs:
                       playerVideoView.pause()
                       tts?.stop()
                       isSpeechActive.set(false)
+                      saveCurrentPosition()
                       playerPlayPauseBtn.text = "▶"
                   } else {
                       applyAudioMuteState()
@@ -1603,7 +1732,7 @@ jobs:
                       window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
                       playerContainer.layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
-                          dpToPx(225)
+                          dpToPx(210)
                       )
                   }
               }
@@ -1622,8 +1751,10 @@ jobs:
                       val uri = data?.data ?: return
                       try {
                           contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                      } catch (_: Exception) {}
-                      playSelectedUri(uri)
+                      } catch (e: Exception) {
+                          showDebugError("URI Permission Exception: ${e.message}")
+                      }
+                      handleVideoSelectionWithResumeCheck(uri)
                   }
               }
 
@@ -1683,7 +1814,8 @@ jobs:
                   tts?.stop()
                   isSpeechActive.set(false)
                   lastSpeechEndTimeMs = 0L
-                  playerSubtitleText.text = ""
+                  playerSubtitleText.text = "हिंदी डब: [डबिंग स्ट्रीम यहाँ दिखेगी]"
+                  originalSubtitleText.text = "Original English: [Waiting for dialogue...]"
 
                   val cached = sessionCacheMap.values
                       .filter { it.startMs in (targetPosMs - 1000L)..(targetPosMs + 20000L) }
@@ -1727,8 +1859,9 @@ jobs:
 
                                               if (!isRecentlySpoken) {
                                                   currentlyPlayingSegment = segment
+                                                  originalSubtitleText.text = "Original: ${segment.originalText}"
                                                   playerSubtitleText.visibility = View.VISIBLE
-                                                  playerSubtitleText.text = segment.translatedText
+                                                  playerSubtitleText.text = "हिंदी डब: ${segment.translatedText}"
 
                                                   recentSpokenTexts.add(norm to now)
                                                   while (recentSpokenTexts.size > 8) recentSpokenTexts.poll()
@@ -1759,7 +1892,7 @@ jobs:
                   return if (longer.contains(shorter)) (shorter.length.toDouble() / longer.length.toDouble()) else 0.0
               }
 
-              private fun populateAndSelectBestModel(apiKey: String) {
+              private fun fetchAndAutoSelectModel(apiKey: String) {
                   try {
                       val url = URL("https://api.groq.com/openai/v1/models")
                       val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -1790,7 +1923,9 @@ jobs:
                               }
                           }
                       }
-                  } catch (_: Exception) {}
+                  } catch (e: Exception) {
+                      showDebugError("Auto Model Fetch Exception: ${e.message}")
+                  }
 
                   candidateModels.sortByDescending {
                       when {
@@ -1827,7 +1962,10 @@ jobs:
                       testExtractor.release()
                   }
 
-                  if (audioTrackIndex < 0 || audioFormat == null) return
+                  if (audioTrackIndex < 0 || audioFormat == null) {
+                      showDebugError("Audio track missing in selected video file.")
+                      return
+                  }
 
                   var nextProducerPosMs = playerVideoView.currentPosition.toLong()
                   var lastCallTime = 0L
@@ -1872,7 +2010,7 @@ jobs:
                           }
 
                           val elapsed = System.currentTimeMillis() - lastCallTime
-                          if (elapsed < 3000L) Thread.sleep(3000L - elapsed)
+                          if (elapsed < 3500L) Thread.sleep(3500L - elapsed) // Safe buffer for 20 RPM limit
 
                           val chunkFile = extractAudioSegment(extractStart, chunkDuration, audioFormat, audioTrackIndex)
                           if (seekTargetMs.get() >= 0) {
@@ -1918,6 +2056,7 @@ jobs:
                               }
                           }
                       } catch (e: Exception) {
+                          showDebugError("Producer Loop Exception: ${e.message}")
                           Thread.sleep(1500)
                       }
                   }
@@ -1982,7 +2121,10 @@ jobs:
                           extractor.release()
 
                           return if (outputFile.exists() && samplesWritten >= 5 && outputFile.length() > 500) outputFile else null
-                      } catch (_: Exception) { return null }
+                      } catch (e: Exception) {
+                          showDebugError("Extract Audio Exception: ${e.message}")
+                          return null
+                      }
                   }
               }
 
@@ -2027,6 +2169,8 @@ jobs:
                               }
                           }
                       }
+                  } else {
+                      showDebugError("Whisper Transcription Error Code: ${conn.responseCode}")
                   }
                   return list
               }
@@ -2038,22 +2182,16 @@ jobs:
                   texts.forEach { jsonArr.put(it) }
 
                   val systemPrompt = """
-                  You are an elite Netflix and Crunchyroll Hindi Anime Dubbing Voice Director.
-                  Your mission is to translate each dialogue into expressive, natural Hindi / Hinglish in native Devanagari script.
-
-                  CRITICAL DUBBING & GENDER RULES:
-                  1. NEVER output English script or return original English lines! Everything must be translated into natural Devanagari script.
-                  2. STRICT GENDER-VERB INFLECTION:
-                     - Tag speaker accurately: 'woman' (or 'girl') if female, 'man' (or 'boy') if male.
-                     - Female speaker MUST use strictly feminine grammar: ('करती हूँ', 'जा रही हूँ', 'सोचती हूँ', 'बताऊँगी', 'मेरी', 'खुश हूँ'). NEVER use masculine verbs for female characters!
-                     - Male speaker MUST use strictly masculine grammar: ('करता हूँ', 'जा रहा हूँ', 'सोचता हूँ', 'बताऊँगा', 'मेरा').
-                  3. NATURAL CINEMATIC VOCABULARY:
-                     - BAN archaic bookish words ('भूभाग', 'जटिल', 'प्रतीक्षा', 'प्रस्थान', 'कदापि', 'सामर्थ्य', 'अवश्य').
-                     - Use real natural conversational words in Devanagari:
-                       'एरिया', 'प्रॉब्लम', 'टेंशन', 'आइडिया', 'वेट', 'सीरियस', 'प्लान', 'लोकेशन', 'चेक', 'ट्रैक', 'रेडी', 'फोकस', 'चांस', 'कॉम्प्लिकेटेड', 'इम्पॉसिबल', 'सॉरी', 'थैंक यू', 'प्लीज', 'ओके', 'कम ऑन', 'लेट्स गो', 'बॉस', 'गाइज', 'डेंजरस', 'मिस', 'कॉल', 'मैसेज', 'फोन', 'टीम'.
+                  You are an expert Indian local dialogue writer and Netflix voice director.
+                  Translate each dialogue into natural, casual Indian spoken Hinglish / Hindi in native Devanagari script.
+                  
+                  CRITICAL STYLE & GENDER RULES:
+                  1. Use everyday natural conversational style (like Indians talking in daily life: "मैं तुम्हारा वेट कर रहा था", "यह डैम कितना बड़ा है", "चलो बाहर चलते हैं").
+                  2. Keep common English words naturally in Devanagari ('वेट', 'डैम', 'प्रॉब्लम', 'ओके', 'लेट्स गो', 'सीरियस', 'प्लान').
+                  3. STRICT GENDER GRAMMAR: Female speakers must use feminine verbs ('करती हूँ', 'रही हूँ', 'सोचती हूँ'), male speakers must use masculine verbs ('करता हूँ', 'रहा हूँ', 'सोचता हूँ').
                   4. Output ONLY a valid JSON array of objects:
-                     [{"text": "अनुवादित हिंदी संवाद।", "speaker": "man"}]
-                  No explanation, no markdown backticks, only pure JSON.
+                     [{"text": "तुम यहाँ क्या कर रहे हो?", "speaker": "man"}]
+                  No markdown, no explanation, pure JSON.
                   """.trimIndent()
 
                   val modelsToTry = mutableListOf<String>()
@@ -2104,8 +2242,12 @@ jobs:
                                   autoResolvedModel = model
                                   return result
                               }
+                          } else {
+                              showDebugError("Groq Translation Error ($model): Code ${conn.responseCode}")
                           }
-                      } catch (_: Exception) {}
+                      } catch (e: Exception) {
+                          showDebugError("Translation Exception ($model): ${e.message}")
+                      }
                   }
 
                   return emptyList()
@@ -2156,7 +2298,7 @@ jobs:
                   else if (cachedMaleVoice != null) tts?.voice = cachedMaleVoice
 
                   tts?.setPitch(1.0f)
-                  tts?.setSpeechRate(1.06f * currentPlaybackSpeed)
+                  tts?.setSpeechRate(1.05f * currentPlaybackSpeed)
               }
 
               private fun resolveStudioVoices() {
@@ -2195,7 +2337,7 @@ jobs:
                       cachedFemaleVoice = selectFinest(femaleCandidates) ?: cachedMaleVoice
 
                   } catch (e: Exception) {
-                      e.printStackTrace()
+                      showDebugError("Studio Voices Exception: ${e.message}")
                   }
               }
 
@@ -2226,6 +2368,8 @@ jobs:
                               uiHandler.post { playerSubtitleText.text = "" }
                           }
                       })
+                  } else {
+                      showDebugError("TTS Init Failure Code: $initStatus")
                   }
               }
 
@@ -2267,6 +2411,7 @@ jobs:
               }
 
               override fun onDestroy() {
+                  saveCurrentPosition()
                   isProcessing.set(false)
                   tts?.stop()
                   tts?.shutdown()
@@ -2275,7 +2420,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully updated with Auto-Model Selector and Working Translation."
+          echo "MainActivity successfully rewritten with perfect Seek-Sync and Dual Subtitles."
 
       - name: Build Debug APK
         run: |
@@ -2290,5 +2435,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-GroqAutoModel-apk
+          name: HindiDubPlayer-FlawlessSync-apk
           path: "**/build/outputs/apk/debug/*.apk"

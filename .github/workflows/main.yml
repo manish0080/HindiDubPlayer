@@ -105,6 +105,7 @@ jobs:
                       <intent>
                           <action android:name="android.intent.action.TTS_SERVICE" />
                       </intent>
+                      <package android:name="com.google.android.tts" />
                   </queries>\n"""
                   content = re.sub(r"(<application\b)", queries_block + r"\1", content)
 
@@ -113,14 +114,14 @@ jobs:
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-          print("AndroidManifest.xml patched successfully with configChanges and TTS Queries.")
+          print("AndroidManifest.xml patched successfully.")
           PYEOF
 
           find . -name "build.gradle.kts" -exec sed -i '/kotlin.*android/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Add Cinematic Netflix Dubbing Engine & Adaptive UI
+      - name: Add Character Voice Separation & Fluent Studio Engine
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -163,7 +164,6 @@ jobs:
           import android.view.Gravity
           import android.view.MotionEvent
           import android.view.View
-          import android.view.WindowInsets
           import android.view.WindowManager
           import android.widget.Button
           import android.widget.FrameLayout
@@ -262,6 +262,10 @@ jobs:
               private var dubStyleKey = "netflix"
               private var currentPlaybackSpeed = 1.0f
 
+              // Distinct Neural Voice Caching
+              private var cachedMaleVoice: Voice? = null
+              private var cachedFemaleVoice: Voice? = null
+
               private lateinit var audioManager: AudioManager
               private var maxVolume = 15
               private var gestureMode = 0
@@ -273,7 +277,6 @@ jobs:
               private var targetGestureSeekPos = 0L
 
               private var systemStatusBarHeight = 0
-              private var systemNavBarHeight = 0
 
               private val availableLanguages = arrayOf(
                   "Hindi (हिन्दी)" to ("hi" to "Hindi"),
@@ -618,7 +621,7 @@ jobs:
                   translatedCard.addView(translatedTitleView)
 
                   translatedContentView = TextView(this).apply {
-                      text = "Expressive Netflix-grade Hindi dialogue stream will flow here."
+                      text = "Expressive, character-accurate Hindi audio will stream here."
                       textSize = 16f
                       setTextColor(Color.parseColor("#BF360C"))
                       setTypeface(null, Typeface.BOLD)
@@ -659,7 +662,6 @@ jobs:
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
                       rootFrame.setOnApplyWindowInsetsListener { _, insets ->
                           systemStatusBarHeight = insets.systemWindowInsetTop
-                          systemNavBarHeight = insets.systemWindowInsetBottom
 
                           if (!isFullscreen) {
                               rootFrame.setPadding(0, systemStatusBarHeight, 0, 0)
@@ -734,7 +736,7 @@ jobs:
                   topBarOverlay.addView(topBarBackBtn)
 
                   topBarTitleView = TextView(this).apply {
-                      text = "  HindiDub Player (Netflix HD)"
+                      text = "  HindiDub Player (Dual Voice HD)"
                       textSize = 13f
                       setTextColor(Color.WHITE)
                       setTypeface(null, Typeface.BOLD)
@@ -1254,7 +1256,6 @@ jobs:
                               .apply()
 
                           applyVideoPlaybackSpeed()
-                          applyCharacterVoice("man")
                           Toast.makeText(this, "Speed: ${currentPlaybackSpeed}x", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
@@ -1278,6 +1279,7 @@ jobs:
                               .apply()
 
                           setTtsLocale(targetLangCode)
+                          resolveStudioVoices()
                           timelineDubQueue.clear()
                           sessionCacheMap.clear()
                           recentSpokenTexts.clear()
@@ -1340,12 +1342,51 @@ jobs:
                   }
               }
 
-              // Ultra-Natural Google Studio Neural Voice Matcher
-              private fun applyCharacterVoice(speakerType: String) {
+              // Separate Male & Female Google Studio Voices
+              private fun resolveStudioVoices() {
                   try {
                       val voices = tts?.voices ?: emptySet()
-                      val langVoices = voices.filter { it.locale.language.equals(targetLangCode, ignoreCase = true) }
+                      val targetVoices = voices.filter {
+                          it.locale.language.equals(targetLangCode, ignoreCase = true) ||
+                          it.locale.toLanguageTag().startsWith(targetLangCode, ignoreCase = true)
+                      }
 
+                      val maleCandidates = targetVoices.filter { v ->
+                          val n = v.name.lowercase()
+                          n.contains("hid") || n.contains("hie") || n.contains("male") || n.contains("man") || n.contains("d-") || n.contains("e-")
+                      }
+
+                      val femaleCandidates = targetVoices.filter { v ->
+                          val n = v.name.lowercase()
+                          n.contains("hic") || n.contains("hia") || n.contains("female") || n.contains("woman") || n.contains("a-") || n.contains("c-")
+                      }
+
+                      fun selectFinest(list: List<Voice>): Voice? {
+                          return list.maxByOrNull { v ->
+                              var score = 0
+                              val n = v.name.lowercase()
+                              if (v.isNetworkConnectionRequired || n.contains("network")) score += 120
+                              if (n.contains("neural2")) score += 90
+                              if (n.contains("wavenet")) score += 70
+                              if (n.contains("x-")) score += 30
+                              if (v.quality >= Voice.QUALITY_VERY_HIGH) score += 40
+                              else if (v.quality >= Voice.QUALITY_HIGH) score += 20
+                              if (!v.isNetworkConnectionRequired && !n.contains("network")) score -= 30
+                              score
+                          } ?: list.firstOrNull()
+                      }
+
+                      cachedMaleVoice = selectFinest(maleCandidates) ?: targetVoices.firstOrNull()
+                      cachedFemaleVoice = selectFinest(femaleCandidates) ?: cachedMaleVoice
+
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                  }
+              }
+
+              // Switch Voice strictly by Character (No Pitch Distortion)
+              private fun applyCharacterVoice(speakerType: String) {
+                  try {
                       val effectiveRole = if (voiceTypeIndex == 0) {
                           speakerType.lowercase()
                       } else {
@@ -1360,69 +1401,27 @@ jobs:
 
                       val isFemaleRole = effectiveRole == "woman" || effectiveRole == "girl"
 
-                      val candidateVoices = langVoices.filter { voice ->
-                          val name = voice.name.lowercase()
-                          if (isFemaleRole) {
-                              name.contains("female") || name.contains("woman") || name.contains("hic") || name.contains("hia") || name.contains("c-") || name.contains("a-")
-                          } else {
-                              name.contains("male") || name.contains("man") || name.contains("hid") || name.contains("hie") || name.contains("d-") || name.contains("e-")
-                          }
+                      if (isFemaleRole) {
+                          if (cachedFemaleVoice != null) tts?.voice = cachedFemaleVoice
+                      } else {
+                          if (cachedMaleVoice != null) tts?.voice = cachedMaleVoice
                       }
 
-                      // Target highest fidelity neural engine (Neural2, Wavenet, Journey)
-                      val bestVoice = candidateVoices.maxByOrNull { voice ->
-                          var score = 0
-                          val n = voice.name.lowercase()
-                          if (n.contains("neural2")) score += 80
-                          else if (n.contains("wavenet")) score += 60
-                          else if (n.contains("neural")) score += 50
-                          if (n.contains("x-")) score += 30
-                          if (n.contains("network")) score += 20
-                          if (voice.quality >= Voice.QUALITY_VERY_HIGH) score += 40
-                          else if (voice.quality >= Voice.QUALITY_HIGH) score += 20
-                          score
-                      } ?: candidateVoices.firstOrNull() ?: langVoices.firstOrNull()
-
-                      if (bestVoice != null) {
-                          tts?.voice = bestVoice
-                      }
-
-                      // Dynamic Cinematic Prosody (Human Chest & Tone Resonance)
-                      var naturalPitch = 1.0f
-                      var naturalRate = 1.0f
-
-                      when (effectiveRole) {
-                          "woman" -> {
-                              naturalPitch = 1.01f
-                              naturalRate = 1.02f
-                          }
-                          "girl" -> {
-                              naturalPitch = 1.08f
-                              naturalRate = 1.03f
-                          }
-                          "boy" -> {
-                              naturalPitch = 1.04f
-                              naturalRate = 1.02f
-                          }
-                          else -> {
-                              // Deep, rich male protagonist timbre
-                              naturalPitch = 0.94f
-                              naturalRate = 1.00f
-                          }
-                      }
-
-                      tts?.setPitch(naturalPitch)
-                      tts?.setSpeechRate(naturalRate * currentPlaybackSpeed)
+                      // Pitch strictly kept 1.0f for pure studio clarity
+                      tts?.setPitch(1.0f)
+                      // 1.08x fluent, continuous speaking speed
+                      tts?.setSpeechRate(1.08f * currentPlaybackSpeed)
 
                   } catch (e: Exception) {
-                      tts?.setPitch(0.96f)
-                      tts?.setSpeechRate(1.0f * currentPlaybackSpeed)
+                      tts?.setPitch(1.0f)
+                      tts?.setSpeechRate(1.08f * currentPlaybackSpeed)
                   }
               }
 
               override fun onInit(initStatus: Int) {
                   if (initStatus == TextToSpeech.SUCCESS) {
                       setTtsLocale(targetLangCode)
+                      resolveStudioVoices()
                       applyCharacterVoice("man")
 
                       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -1446,7 +1445,7 @@ jobs:
                                   if (!isSpeechActive.get()) {
                                       fullscreenSubtitleView.text = ""
                                   }
-                              }, 250)
+                              }, 200)
                           }
 
                           override fun onError(utteranceId: String?) {
@@ -1568,7 +1567,7 @@ jobs:
                               val curPos = videoView.currentPosition.toLong()
                               val now = System.currentTimeMillis()
 
-                              val tightGapMs = (160L / currentPlaybackSpeed).toLong().coerceIn(90L, 160L)
+                              val tightGapMs = (120L / currentPlaybackSpeed).toLong().coerceIn(60L, 120L)
                               val isBusySpeaking = isSpeechActive.get() || (tts?.isSpeaking == true)
 
                               if (!isBusySpeaking && (now - lastSpeechEndTimeMs >= tightGapMs)) {
@@ -1993,37 +1992,34 @@ jobs:
                   return segmentsList
               }
 
-              // Netflix Cinematic & Anime Dub Director Master Prompt
+              // Netflix Cinematic Dub Director with Strict Character Gender Tagging
               private fun buildMasterSystemPrompt(targetLang: String, style: String): String {
                   return """
-                  You are an elite Netflix / Crunchyroll Hindi Anime Dubbing Voice Director.
-                  Your mission is to adapt dialogue into hyper-natural, cinematic, and punchy Hindi/Hinglish in Devanagari script so that it sounds like real humans in an expensive anime movie, NEVER like robotic machine translation.
+                  You are a master Netflix / Crunchyroll Hindi Anime Dubbing Director.
+                  Adapt the dialogue into natural, fluent, and connected Hindi/Hinglish in Devanagari script.
 
-                  GOLDEN CINEMATIC DUBBING PRINCIPLES:
-                  1. AUTHENTIC VOCAL CADENCE & NATURAL FILLERS:
-                     - Don't just translate words; translate the breath, emotion, and attitude of the scene!
-                     - Blend natural spoken conversational fillers organically:
-                       * 'अरे यार...', 'सुनो,', 'वेट...', 'ओह!', 'रुको जरा,', 'व्हाट?!', 'मतलब कुछ भी!', 'सीरियसली!', 'नो वे!'
-                     - Break rigid long sentences into snappy, natural dialogue punches.
+                  CRITICAL DUBBING & SPEAKER RULES:
+                  1. PRECISE SPEAKER GENDER IDENTIFICATION:
+                     - Analyze dialogue context, tone, pronouns, and who is speaking to whom.
+                     - Accurately tag the speaker as 'woman' (or 'girl') if female, or 'man' (or 'boy') if male.
+                     - Female speaker MUST have strictly feminine grammar: ('करती हूँ', 'जा रही हूँ', 'सोचती हूँ', 'बताऊँगी', 'मेरी', 'खुश हूँ').
+                     - Male speaker MUST have strictly masculine grammar: ('करता हूँ', 'जा रहा हूँ', 'सोचता हूँ', 'बताऊँगा', 'मेरा').
 
-                  2. 100% ELIMINATE ARCHAIC BOOKISH HINDI:
-                     - STRICTLY FORBIDDEN words: 'भूभाग', 'जटिल', 'प्रतीक्षा', 'प्रस्थान', 'कदापि', 'सामर्थ्य', 'अवश्य', 'संदेह', 'मित्रवर'.
-                     - Use real spoken Indian urban vocabulary in Devanagari:
+                  2. FLUENT, CONNECTED CONVERSATIONAL FLOW:
+                     - Dialogues must be fluent, confident, and spoken in a smooth natural breath.
+                     - Do NOT produce choppy, short fragments with multiple commas.
+                     - NEVER use archaic textbook words ('भूभाग', 'जटिल', 'प्रतीक्षा', 'प्रस्थान', 'कदापि', 'सामर्थ्य', 'अवश्य').
+                     - Use real natural conversational words in Devanagari:
                        'एरिया', 'प्रॉब्लम', 'टेंशन', 'आइडिया', 'वेट', 'सीरियस', 'प्लान', 'लोकेशन', 'चेक', 'ट्रैक', 'रेडी', 'फोकस', 'चांस', 'कॉम्प्लिकेटेड', 'इम्पॉसिबल', 'सॉरी', 'थैंक यू', 'प्लीज', 'ओके', 'कम ऑन', 'लेट्स गो', 'बॉस', 'गाइज', 'डेंजरस', 'मिस', 'कॉल', 'मैसेज', 'फोन', 'टीम'.
 
-                  3. STRICT CHARACTER & GENDER-VERB INFLECTION:
-                     - Accurately determine speaker character: 'man', 'woman', 'boy', 'girl'.
-                     - Female / Girl: First-person verbs & possessives MUST be feminine ('करती हूँ', 'जा रही हूँ', 'सोचती हूँ', 'बताऊँगी', 'मेरी', 'खुश हूँ'). NEVER use masculine verbs ('करता हूँ', 'जा रहा हूँ') for female characters!
-                     - Male / Boy: First-person verbs MUST be masculine ('करता हूँ', 'जा रहा हूँ', 'सोचता हूँ', 'बताऊँगा', 'मेरा').
-
-                  4. BREATHING & RHYTHMIC PUNCTUATION:
-                     - To create natural human breathing in TTS, use ONLY commas (,) for quick 120ms pauses and Devanagari purna viram (।) for natural sentence ends.
-                     - NEVER output English dots (.), semicolons (;), or ellipsis (...). Write abbreviations in full ('डॉक्टर', 'मिस्टर').
+                  3. NO UNWANTED PUNCTUATION PAUSES:
+                     - NEVER output English dots (.), semicolons (;), or ellipsis (...).
+                     - Use ONLY a single Devanagari purna viram (।) at the end of the thought. Do NOT put commas after every word.
 
                   OUTPUT FORMAT:
                   Output ONLY a valid JSON array of objects:
-                  [{"text": "अरे यार, यह एरिया तो काफी डेंजरस और कॉम्प्लिकेटेड लग रहा है।", "speaker": "man"}]
-                  No explanation, no markdown ticks, only pure JSON.
+                  [{"text": "अरे सुनो, यह एरिया सच में बहुत कॉम्प्लिकेटेड लग रहा है।", "speaker": "man"}]
+                  No explanation, no markdown backticks, only pure JSON.
                   """.trimIndent()
               }
 
@@ -2180,7 +2176,7 @@ jobs:
                   return true
               }
 
-              // Human Micro-Pausing & Clean Dialogue Filter
+              // Fluent Text Cleaner: Eliminates robotic mid-sentence pauses
               private fun cleanTextForDubbing(text: String, langCode: String): String {
                   var res = text.trim()
 
@@ -2193,14 +2189,15 @@ jobs:
                   res = res.replace(Regex("(?i)\\b(ok|okay)\\b"), "ओके")
                   res = res.replace(Regex("(?i)\\b(sir)\\b"), "सर")
 
-                  // Replace dots and pauses with micro-breaths
-                  res = res.replace("...", ", ")
-                  res = res.replace("..", ", ")
+                  // Remove awkward pauses and replace with clean continuity
+                  res = res.replace("...", " ")
+                  res = res.replace("..", " ")
                   res = res.replace(".", "। ")
                   res = res.replace("!", "। ")
                   res = res.replace("?", "। ")
-                  res = res.replace(";", ", ")
-                  res = res.replace(":", ", ")
+                  res = res.replace(";", " ")
+                  res = res.replace(":", " ")
+                  res = res.replace(",", " ")
                   res = res.replace("-", " ")
                   res = res.replace("—", " ")
                   res = res.replace("/", " ")
@@ -2216,7 +2213,6 @@ jobs:
                   res = res.replace(Regex("\\b(डॉट|कॉमा|पॉइंट|डैश|फुल स्टॉप)\\b"), " ")
 
                   res = res.replace(Regex("।+"), "।")
-                  res = res.replace(Regex(",+"), ",")
                   res = res.replace(Regex("\\s+"), " ").trim()
 
                   return res
@@ -2250,7 +2246,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully upgraded to Cinematic Netflix Dub Engine"
+          echo "MainActivity successfully upgraded to Character Studio Dual-Voice Engine"
 
       - name: Build Debug APK
         run: |
@@ -2265,5 +2261,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-NetflixDub-apk
+          name: HindiDubPlayer-DualVoiceStudio-apk
           path: "**/build/outputs/apk/debug/*.apk"

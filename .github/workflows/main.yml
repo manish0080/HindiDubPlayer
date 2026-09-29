@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Clean and Bulletproof MainActivity
+      - name: Inject Complete and Fully Intact MainActivity
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 

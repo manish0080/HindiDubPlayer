@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Final Production Grade Code Injection
+      - name: Inject Final Stable Code Combining Old Stability & New UI
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -223,7 +223,7 @@ jobs:
 
           class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
-              private val PERMISSION_REQ_CODE = 8001
+              private val PERMISSION_REQ_CODE = 9001
 
               private lateinit var rootContainer: FrameLayout
               private lateinit var screenContainer: FrameLayout
@@ -1133,7 +1133,7 @@ jobs:
                   })
 
                   container.addView(createSettingItem("हमसे संपर्क करें", "फ़ीडबैक / सपोर्ट ›", TextView(this)) {
-                      Toast.makeText(this, "Hindi Dub Player v3.1 • Premium AI Cinema Voice", Toast.LENGTH_LONG).show()
+                      Toast.makeText(this, "Hindi Dub Player v3.2 • Ultimate Cinema Voice", Toast.LENGTH_LONG).show()
                   })
 
                   viewSettings.addView(container)
@@ -1465,7 +1465,6 @@ jobs:
                   }
               }
 
-              // Perfectly Distributed & Elevation Fixed Bottom Navigation
               private fun buildBottomNavigation() {
                   bottomNavBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
@@ -1977,7 +1976,6 @@ jobs:
                   return list
               }
 
-              // True Netflix/Crunchyroll Anime Dub Director Prompt (Zero Fallback Loop)
               private fun translateBatch(texts: List<String>, targetLang: String, style: String, apiKey: String): List<Pair<String, String>> {
                   if (texts.isEmpty()) return emptyList()
 
@@ -2210,7 +2208,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with all fixes and permanent Netflix dub engine."
+          echo "MainActivity successfully updated with final production stability."
 
       - name: Build Debug APK
         run: |
@@ -2225,5 +2223,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-FinalProduction-apk
+          name: HindiDubPlayer-ProductionFinal-apk
           path: "**/build/outputs/apk/debug/*.apk"

@@ -32,7 +32,7 @@ jobs:
 
       - name: Unzip Starter Project
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -1)
           if [ -n "$ZIP_FILE" ]; then
             echo "Extracting: $ZIP_FILE"
             unzip -q "$ZIP_FILE" -d .
@@ -88,7 +88,7 @@ jobs:
           sed -i 's/ android:icon="[^"]*"//g' "$MANIFEST"
           sed -i 's/<application[[:space:]]*/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher" /' "$MANIFEST"
 
-      - name: Robust AndroidManifest & Build Fix
+      - name: Robust AndroidManifest, Queries & Build Fix
         run: |
           python3 - << 'PYEOF'
           import glob, re
@@ -100,19 +100,27 @@ jobs:
               if "android.permission.INTERNET" not in content:
                   content = re.sub(r"(<application\b)", r'    <uses-permission android:name="android.permission.INTERNET" />\n\1', content)
 
+              if "<queries>" not in content:
+                  queries_block = """    <queries>
+                      <intent>
+                          <action android:name="android.intent.action.TTS_SERVICE" />
+                      </intent>
+                  </queries>\n"""
+                  content = re.sub(r"(<application\b)", queries_block + r"\1", content)
+
               content = re.sub(r'\s*android:configChanges="[^"]*"', '', content)
               content = re.sub(r'<activity(\s+)', r'<activity android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode" \1', content)
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-          print("AndroidManifest.xml patched successfully with configChanges.")
+          print("AndroidManifest.xml patched successfully with configChanges and TTS Queries.")
           PYEOF
 
           find . -name "build.gradle.kts" -exec sed -i '/kotlin.*android/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Add Enhanced Modern VLC-Style Player & UI
+      - name: Add Enhanced Modern VLC-Style Player & Adaptive UI
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -135,6 +143,7 @@ jobs:
           import android.graphics.Color
           import android.graphics.Typeface
           import android.graphics.drawable.GradientDrawable
+          import android.media.AudioAttributes
           import android.media.AudioManager
           import android.media.MediaCodec
           import android.media.MediaExtractor
@@ -149,10 +158,12 @@ jobs:
           import android.os.Looper
           import android.speech.tts.TextToSpeech
           import android.speech.tts.UtteranceProgressListener
+          import android.speech.tts.Voice
           import android.view.GestureDetector
           import android.view.Gravity
           import android.view.MotionEvent
           import android.view.View
+          import android.view.WindowInsets
           import android.view.WindowManager
           import android.widget.Button
           import android.widget.FrameLayout
@@ -188,6 +199,7 @@ jobs:
 
           class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
+              private lateinit var rootFrame: FrameLayout
               private lateinit var videoContainer: FrameLayout
               private lateinit var videoView: VideoView
               private lateinit var mainScrollView: ScrollView
@@ -240,6 +252,8 @@ jobs:
               private val sessionCacheMap = ConcurrentHashMap<Long, TimestampDubSegment>()
               private var currentlyPlayingSegment: TimestampDubSegment? = null
 
+              private val recentSpokenTexts = ConcurrentLinkedQueue<Pair<String, Long>>()
+              private var lastSpokenDialogueText = ""
               private var lastSpeechEndTimeMs = 0L
               private val isSpeechActive = AtomicBoolean(false)
 
@@ -258,6 +272,9 @@ jobs:
               private var initialBrightness = 0.5f
               private var initialSeekPos = 0L
               private var targetGestureSeekPos = 0L
+
+              private var systemStatusBarHeight = 0
+              private var systemNavBarHeight = 0
 
               private val availableLanguages = arrayOf(
                   "Hindi (हिन्दी)" to ("hi" to "Hindi"),
@@ -316,7 +333,19 @@ jobs:
                   volumeControlStream = AudioManager.STREAM_MUSIC
                   audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                   maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                  tts = TextToSpeech(this, this)
+
+                  // Notch & Cutout Handling for Modern Android
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                      window.attributes.layoutInDisplayCutoutMode =
+                          WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                  }
+
+                  // Prefer Google Speech Engine for Studio Quality Voice
+                  try {
+                      tts = TextToSpeech(this, this, "com.google.android.tts")
+                  } catch (_: Exception) {
+                      tts = TextToSpeech(this, this)
+                  }
 
                   purgeSessionTempFiles()
 
@@ -327,7 +356,7 @@ jobs:
                   dubStyleKey = prefs.getString("DUB_STYLE", "emotional") ?: "emotional"
                   currentPlaybackSpeed = prefs.getFloat("PLAY_SPEED", 1.0f)
 
-                  val rootFrame = FrameLayout(this).apply {
+                  rootFrame = FrameLayout(this).apply {
                       setBackgroundColor(Color.parseColor("#0F1015"))
                   }
 
@@ -339,12 +368,16 @@ jobs:
                       )
                   }
 
-                  // 240dp modern height for 16:9 mobile view in portrait mode
+                  // Adaptive 16:9 Video Container
+                  val displayMetrics = resources.displayMetrics
+                  val screenWidth = displayMetrics.widthPixels
+                  val computedHeight = ((screenWidth * 9) / 16).coerceIn(dpToPx(210), dpToPx(260))
+
                   videoContainer = FrameLayout(this).apply {
                       setBackgroundColor(Color.BLACK)
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
-                          dpToPx(240)
+                          computedHeight
                       )
                   }
 
@@ -411,7 +444,6 @@ jobs:
                   videoContainer.addView(centerStartBtn)
                   mainVerticalLayout.addView(videoContainer)
 
-                  // Content view below video container
                   mainScrollView = ScrollView(this).apply {
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
@@ -427,7 +459,6 @@ jobs:
                       setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(20))
                   }
 
-                  // Modern Action Header (Open Video + Status)
                   val modernHeaderRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -467,7 +498,6 @@ jobs:
                   modernHeaderRow.addView(speakerTagBadge)
                   cardsContainer.addView(modernHeaderRow)
 
-                  // Quick Pill Carousel
                   val pillScroller = HorizontalScrollView(this).apply {
                       isHorizontalScrollBarEnabled = false
                       val params = LinearLayout.LayoutParams(
@@ -501,7 +531,6 @@ jobs:
                   pillScroller.addView(pillRow)
                   cardsContainer.addView(pillScroller)
 
-                  // Status Indicator Row
                   val statusRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -532,7 +561,6 @@ jobs:
                   statusRow.addView(statusBadge)
                   cardsContainer.addView(statusRow)
 
-                  // Card 1: Original Subtitles
                   val originalCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = createCardDrawable(Color.WHITE, Color.parseColor("#E0E4E8"), dpToPx(14).toFloat(), dpToPx(1))
@@ -567,7 +595,6 @@ jobs:
                   originalCard.addView(originalContentView)
                   cardsContainer.addView(originalCard)
 
-                  // Card 2: Dubbed Hindi Output
                   val translatedCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = createCardDrawable(Color.parseColor("#FFF9F0"), Color.parseColor("#FFE0B2"), dpToPx(14).toFloat(), dpToPx(1))
@@ -609,6 +636,9 @@ jobs:
 
                   setContentView(rootFrame)
 
+                  // Automatic Phone Status Bar & Insets Listener
+                  setupWindowInsetsAdapter()
+
                   setupSeekBarListeners()
                   setupVlcGestures()
 
@@ -630,6 +660,31 @@ jobs:
                   startSeekBarUpdater()
               }
 
+              private fun setupWindowInsetsAdapter() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+                      rootFrame.setOnApplyWindowInsetsListener { _, insets ->
+                          systemStatusBarHeight = insets.systemWindowInsetTop
+                          systemNavBarHeight = insets.systemWindowInsetBottom
+
+                          if (!isFullscreen) {
+                              rootFrame.setPadding(0, systemStatusBarHeight, 0, 0)
+                              topBarOverlay.setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6))
+                              bottomControlsBar.setPadding(dpToPx(14), dpToPx(4), dpToPx(12), dpToPx(6))
+                          } else {
+                              rootFrame.setPadding(0, 0, 0, 0)
+                              val cutoutLeft = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) insets.displayCutout?.safeInsetLeft ?: 0 else 0
+                              val cutoutRight = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) insets.displayCutout?.safeInsetRight ?: 0 else 0
+                              val padLeft = Math.max(cutoutLeft, dpToPx(16))
+                              val padRight = Math.max(cutoutRight, dpToPx(16))
+
+                              topBarOverlay.setPadding(padLeft, dpToPx(10), padRight, dpToPx(8))
+                              bottomControlsBar.setPadding(padLeft, dpToPx(6), padRight, dpToPx(12))
+                          }
+                          insets
+                      }
+                  }
+              }
+
               private fun buildOnScreenPlayerControls() {
                   playerControlsOverlay = FrameLayout(this).apply {
                       layoutParams = FrameLayout.LayoutParams(
@@ -640,7 +695,6 @@ jobs:
                       visibility = View.GONE
                   }
 
-                  // Center Gesture HUD Badge
                   centerIndicatorBadge = TextView(this).apply {
                       textSize = 15f
                       setTextColor(Color.WHITE)
@@ -658,7 +712,6 @@ jobs:
                   }
                   playerControlsOverlay.addView(centerIndicatorBadge)
 
-                  // Top Overlay Bar (Title & Back)
                   topBarOverlay = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -694,7 +747,6 @@ jobs:
                   topBarOverlay.addView(topBarTitleView)
                   playerControlsOverlay.addView(topBarOverlay)
 
-                  // Center Floating Playback Controls (Rewind | Play/Pause | Forward)
                   centerControlsRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER
@@ -761,7 +813,6 @@ jobs:
                   centerControlsRow.addView(onScreenFwdBtn)
                   playerControlsOverlay.addView(centerControlsRow)
 
-                  // Bottom On-Screen Bar (Time | SeekBar | Fullscreen Toggle)
                   bottomControlsBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -989,6 +1040,7 @@ jobs:
                       )
                   }
 
+                  rootFrame.setPadding(0, 0, 0, 0)
                   mainScrollView.visibility = View.GONE
                   videoContainer.layoutParams = LinearLayout.LayoutParams(
                       LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1008,10 +1060,16 @@ jobs:
 
                   window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
 
+                  rootFrame.setPadding(0, systemStatusBarHeight, 0, 0)
                   mainScrollView.visibility = View.VISIBLE
+
+                  val displayMetrics = resources.displayMetrics
+                  val screenWidth = displayMetrics.widthPixels
+                  val computedHeight = ((screenWidth * 9) / 16).coerceIn(dpToPx(210), dpToPx(260))
+
                   videoContainer.layoutParams = LinearLayout.LayoutParams(
                       LinearLayout.LayoutParams.MATCH_PARENT,
-                      dpToPx(240)
+                      computedHeight
                   )
 
                   topBarBackBtn.visibility = View.GONE
@@ -1115,6 +1173,7 @@ jobs:
                   isSeeking.set(true)
                   seekTargetMs.set(targetPosMs)
                   timelineDubQueue.clear()
+                  recentSpokenTexts.clear()
                   currentlyPlayingSegment = null
                   tts?.stop()
                   isSpeechActive.set(false)
@@ -1226,6 +1285,7 @@ jobs:
                           setTtsLocale(targetLangCode)
                           timelineDubQueue.clear()
                           sessionCacheMap.clear()
+                          recentSpokenTexts.clear()
                           Toast.makeText(this, "Language: $targetLangName", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
@@ -1262,6 +1322,7 @@ jobs:
 
                           timelineDubQueue.clear()
                           sessionCacheMap.clear()
+                          recentSpokenTexts.clear()
                           Toast.makeText(this, "Style: ${styleNames[which]}", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
@@ -1276,24 +1337,11 @@ jobs:
                   }
               }
 
+              // Studio Natural HD Voice Selection
               private fun applyCharacterVoice(speakerType: String) {
                   try {
                       val voices = tts?.voices ?: emptySet()
                       val langVoices = voices.filter { it.locale.language.equals(targetLangCode, ignoreCase = true) }
-
-                      val maleVoice = langVoices.firstOrNull {
-                          it.name.contains("male", true) ||
-                          it.name.contains("hid", true) ||
-                          it.name.contains("hie", true) ||
-                          it.name.contains("man", true)
-                      } ?: langVoices.firstOrNull { it.name.contains("d-local", true) || it.name.contains("e-local", true) }
-
-                      val femaleVoice = langVoices.firstOrNull {
-                          it.name.contains("female", true) ||
-                          it.name.contains("hic", true) ||
-                          it.name.contains("hia", true) ||
-                          it.name.contains("woman", true)
-                      } ?: langVoices.firstOrNull { it.name.contains("c-local", true) || it.name.contains("a-local", true) }
 
                       val effectiveRole = if (voiceTypeIndex == 0) {
                           speakerType.lowercase()
@@ -1307,37 +1355,61 @@ jobs:
                           }
                       }
 
-                      var basePitch = 1.0f
-                      var baseRate = 1.06f
+                      val isFemaleRole = effectiveRole == "woman" || effectiveRole == "girl"
 
-                      when (effectiveRole) {
-                          "woman" -> {
-                              if (femaleVoice != null) tts?.voice = femaleVoice
-                              basePitch = 1.05f
-                              baseRate = 1.06f
-                          }
-                          "girl" -> {
-                              if (femaleVoice != null) tts?.voice = femaleVoice
-                              basePitch = 1.38f
-                              baseRate = 1.05f
-                          }
-                          "boy" -> {
-                              if (maleVoice != null) tts?.voice = maleVoice
-                              basePitch = 1.25f
-                              baseRate = 1.08f
-                          }
-                          else -> {
-                              if (maleVoice != null) tts?.voice = maleVoice
-                              basePitch = 0.75f
-                              baseRate = 1.08f
+                      val candidateVoices = langVoices.filter { voice ->
+                          val name = voice.name.lowercase()
+                          if (isFemaleRole) {
+                              name.contains("female") || name.contains("woman") || name.contains("hic") || name.contains("hia") || name.contains("c-") || name.contains("a-")
+                          } else {
+                              name.contains("male") || name.contains("man") || name.contains("hid") || name.contains("hie") || name.contains("d-") || name.contains("e-")
                           }
                       }
 
-                      tts?.setPitch(basePitch)
-                      tts?.setSpeechRate(baseRate * currentPlaybackSpeed)
+                      val bestVoice = candidateVoices.maxByOrNull { voice ->
+                          var score = 0
+                          val n = voice.name.lowercase()
+                          if (n.contains("neural") || n.contains("wavenet")) score += 50
+                          if (n.contains("x-")) score += 30
+                          if (n.contains("network")) score += 20
+                          if (voice.quality >= Voice.QUALITY_VERY_HIGH) score += 40
+                          else if (voice.quality >= Voice.QUALITY_HIGH) score += 20
+                          score
+                      } ?: candidateVoices.firstOrNull() ?: langVoices.firstOrNull()
+
+                      if (bestVoice != null) {
+                          tts?.voice = bestVoice
+                      }
+
+                      // Natural Pitch and Tone (No Robotic Pitch Distortion)
+                      var naturalPitch = 1.0f
+                      var naturalRate = 1.02f
+
+                      when (effectiveRole) {
+                          "woman" -> {
+                              naturalPitch = 1.05f
+                              naturalRate = 1.02f
+                          }
+                          "girl" -> {
+                              naturalPitch = 1.14f
+                              naturalRate = 1.04f
+                          }
+                          "boy" -> {
+                              naturalPitch = 1.10f
+                              naturalRate = 1.04f
+                          }
+                          else -> {
+                              naturalPitch = 0.96f
+                              naturalRate = 1.02f
+                          }
+                      }
+
+                      tts?.setPitch(naturalPitch)
+                      tts?.setSpeechRate(naturalRate * currentPlaybackSpeed)
 
                   } catch (e: Exception) {
-                      tts?.setSpeechRate(1.06f * currentPlaybackSpeed)
+                      tts?.setPitch(1.0f)
+                      tts?.setSpeechRate(1.02f * currentPlaybackSpeed)
                   }
               }
 
@@ -1345,6 +1417,14 @@ jobs:
                   if (initStatus == TextToSpeech.SUCCESS) {
                       setTtsLocale(targetLangCode)
                       applyCharacterVoice("man")
+
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                          val attrs = AudioAttributes.Builder()
+                              .setUsage(AudioAttributes.USAGE_MEDIA)
+                              .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                              .build()
+                          tts?.setAudioAttributes(attrs)
+                      }
 
                       tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                           override fun onStart(utteranceId: String?) {
@@ -1424,6 +1504,7 @@ jobs:
                       seekTargetMs.set(-1L)
                       timelineDubQueue.clear()
                       sessionCacheMap.clear()
+                      recentSpokenTexts.clear()
                       currentlyPlayingSegment = null
                       fullscreenSubtitleView.text = ""
 
@@ -1464,6 +1545,7 @@ jobs:
                   isSeeking.set(false)
                   isSpeechActive.set(false)
                   timelineDubQueue.clear()
+                  recentSpokenTexts.clear()
                   currentlyPlayingSegment = null
                   statusBadge.text = "Pre-buffering live dialogue session..."
 
@@ -1472,6 +1554,7 @@ jobs:
                   }.start()
               }
 
+              // Anti-Repeat Consumer Loop
               private fun startTimestampConsumerLoop() {
                   uiHandler.postDelayed(object : Runnable {
                       override fun run() {
@@ -1486,18 +1569,33 @@ jobs:
                                   for (segment in timelineDubQueue) {
                                       if (!segment.isTriggered && curPos >= segment.startMs - 200L) {
                                           if (curPos <= segment.endMs + 3500L) {
+                                              val normText = segment.translatedText.trim().lowercase()
+
+                                              // Stop Repeated Sentence Loops
+                                              val isRecentlySpoken = recentSpokenTexts.any {
+                                                  (it.first == normText || calculateSimilarity(it.first, normText) > 0.8) &&
+                                                  (now - it.second < 12000L)
+                                              }
+
                                               segment.isTriggered = true
-                                              currentlyPlayingSegment = segment
 
-                                              originalContentView.text = segment.originalText
-                                              translatedContentView.text = segment.translatedText
-                                              fullscreenSubtitleView.text = segment.translatedText
+                                              if (!isRecentlySpoken) {
+                                                  currentlyPlayingSegment = segment
 
-                                              speakerTagBadge.visibility = View.VISIBLE
-                                              speakerTagBadge.text = "SPEAKER: ${segment.speakerType.uppercase()}"
-                                              statusBadge.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
+                                                  originalContentView.text = segment.originalText
+                                                  translatedContentView.text = segment.translatedText
+                                                  fullscreenSubtitleView.text = segment.translatedText
 
-                                              speakDubbed(segment.translatedText, segment.speakerType)
+                                                  speakerTagBadge.visibility = View.VISIBLE
+                                                  speakerTagBadge.text = "SPEAKER: ${segment.speakerType.uppercase()}"
+                                                  statusBadge.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
+
+                                                  recentSpokenTexts.add(normText to now)
+                                                  while (recentSpokenTexts.size > 8) recentSpokenTexts.poll()
+
+                                                  lastSpokenDialogueText = normText
+                                                  speakDubbed(segment.translatedText, segment.speakerType)
+                                              }
                                               break
                                           } else {
                                               segment.isTriggered = true
@@ -1511,6 +1609,14 @@ jobs:
                           uiHandler.postDelayed(this, 40)
                       }
                   }, 40)
+              }
+
+              private fun calculateSimilarity(s1: String, s2: String): Double {
+                  if (s1 == s2) return 1.0
+                  val longer = if (s1.length > s2.length) s1 else s2
+                  val shorter = if (s1.length > s2.length) s2 else s1
+                  if (longer.isEmpty()) return 1.0
+                  return if (longer.contains(shorter)) (shorter.length.toDouble() / longer.length.toDouble()) else 0.0
               }
 
               private fun populateAccountModels(apiKey: String) {
@@ -2061,13 +2167,14 @@ jobs:
                   tts?.shutdown()
                   timelineDubQueue.clear()
                   sessionCacheMap.clear()
+                  recentSpokenTexts.clear()
                   purgeSessionTempFiles()
                   super.onDestroy()
               }
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity rewritten with On-Screen VLC controls and modern UI layout"
+          echo "MainActivity rewritten with Anti-Repeat System, Studio HD Voice, and Adaptive Insets"
 
       - name: Build Debug APK
         run: |
@@ -2082,5 +2189,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-ModernUI-apk
+          name: HindiDubPlayer-StudioAdaptive-apk
           path: "**/build/outputs/apk/debug/*.apk"

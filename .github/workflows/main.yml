@@ -43,7 +43,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Add Video Progress SeekBar & TranslateTube UI
+      - name: Add Enhanced VLC Style SeekBar & TranslateTube UI
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -237,7 +237,7 @@ jobs:
                       setBackgroundColor(Color.BLACK)
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
-                          dpToPx(215)
+                          dpToPx(210)
                       )
                   }
 
@@ -288,11 +288,11 @@ jobs:
                   videoContainer.addView(centerStartBtn)
                   mainVerticalLayout.addView(videoContainer)
 
-                  // VIDEO PROGRESS SEEKBAR & TIME LAYOUT
-                  val seekerLayout = LinearLayout(this).apply {
+                  // ADVANCED SEEKBAR & DURATION CONTROL BAR
+                  val seekerBarLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setBackgroundColor(Color.parseColor("#1C1C1C"))
-                      setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(6))
+                      setBackgroundColor(Color.parseColor("#121212"))
+                      setPadding(dpToPx(14), dpToPx(6), dpToPx(14), dpToPx(8))
                   }
 
                   videoSeekBar = SeekBar(this).apply {
@@ -303,21 +303,22 @@ jobs:
                       progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#FF5722"))
                       thumbTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#FF5722"))
                   }
-                  seekerLayout.addView(videoSeekBar)
+                  seekerBarLayout.addView(videoSeekBar)
 
-                  val timeRow = LinearLayout(this).apply {
+                  val timeInfoRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                   }
 
                   timeStatusView = TextView(this).apply {
                       text = "00:00 / 00:00"
-                      textSize = 11f
-                      setTextColor(Color.parseColor("#B0BEC5"))
+                      textSize = 12f
+                      setTextColor(Color.parseColor("#CFD8DC"))
+                      setTypeface(null, Typeface.BOLD)
                   }
-                  timeRow.addView(timeStatusView)
-                  seekerLayout.addView(timeRow)
-                  mainVerticalLayout.addView(seekerLayout)
+                  timeInfoRow.addView(timeStatusView)
+                  seekerBarLayout.addView(timeInfoRow)
+                  mainVerticalLayout.addView(seekerBarLayout)
 
                   mainScrollView = ScrollView(this).apply {
                       layoutParams = LinearLayout.LayoutParams(
@@ -653,9 +654,9 @@ jobs:
                                   timeStatusView.text = "${formatTime(currentPos.toLong())} / ${formatTime(totalDuration.toLong())}"
                               }
                           }
-                          uiHandler.postDelayed(this, 500)
+                          uiHandler.postDelayed(this, 300)
                       }
-                  }, 500)
+                  }, 300)
               }
 
               private fun toggleFullscreen() {
@@ -682,7 +683,7 @@ jobs:
                       mainScrollView.visibility = View.VISIBLE
                       videoContainer.layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
-                          dpToPx(215)
+                          dpToPx(210)
                       )
                       fullscreenSubtitleView.visibility = View.GONE
                       fullscreenBtn.text = "⛶"
@@ -1649,7 +1650,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with Video SeekBar & Time counter"
+          echo "MainActivity successfully rewritten with Fixed VLC SeekBar"
 
       - name: Build Debug APK
         run: |
@@ -1664,5 +1665,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: HindiDubPlayer-SeekBar-apk
+          name: HindiDubPlayer-VLCSeekBar-apk
           path: "**/build/outputs/apk/debug/*.apk"

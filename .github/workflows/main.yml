@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Complete Final Code with Audio Stream Toggle
+      - name: Inject Absolute Emotional Masterpiece Code
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -429,6 +429,7 @@ jobs:
 
                   startTimestampConsumerLoop()
                   startSeekBarUpdater()
+                  setupSeekBarListeners()
               }
 
               private fun checkPermissions() {
@@ -849,7 +850,6 @@ jobs:
                   playerContainer.addView(playerVideoView)
                   viewPlayer.addView(playerContainer)
 
-                  // Dual Subtitle Container (Original English on top, Hindi Dub below)
                   val subtitleContainer = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setPadding(dpToPx(16), dpToPx(6), dpToPx(16), dpToPx(6))
@@ -971,7 +971,6 @@ jobs:
                   controlSection.addView(btnRow)
                   viewPlayer.addView(controlSection)
 
-                  // Audio Settings Card with Original Audio Extraction Stream Toggle
                   val audioCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = createCardDrawable(Color.parseColor("#171A24"), Color.parseColor("#252A3A"), dpToPx(14).toFloat(), dpToPx(1))
@@ -1224,7 +1223,7 @@ jobs:
                   })
 
                   container.addView(createSettingItem("हमसे संपर्क करें", "फ़ीडबैक / सपोर्ट ›", TextView(this)) {
-                      Toast.makeText(this, "Hindi Dub Player v4.1 • Ultimate Masterpiece", Toast.LENGTH_LONG).show()
+                      Toast.makeText(this, "Hindi Dub Player v4.4 • Ultimate Emotional Masterpiece", Toast.LENGTH_LONG).show()
                   })
 
                   viewSettings.addView(container)
@@ -1647,36 +1646,6 @@ jobs:
                   navLabelHistory.setTextColor(if (index == 4) Color.parseColor("#3860F5") else Color.parseColor("#8A98A8"))
               }
 
-              private fun playSelectedUri(uri: Uri, startPosMs: Int = 0) {
-                  selectedVideoUri = uri
-                  addVideoToHistory(uri)
-                  playerVideoView.setVideoURI(uri)
-                  showScreen(2)
-                  startDubbingProcess(uri)
-                  playerVideoView.setOnPreparedListener { mp ->
-                      mediaPlayerRef = mp
-                      applyAudioMuteState()
-                      applyVideoPlaybackSpeed()
-                      playerSeekBar.max = playerVideoView.duration
-                      playerTimeTotal.text = formatTime(playerVideoView.duration.toLong())
-                      if (startPosMs > 0) {
-                          playerVideoView.seekTo(startPosMs)
-                      }
-                      playerVideoView.start()
-                      playerPlayPauseBtn.text = "⏸"
-                  }
-              }
-
-              private fun saveCurrentPosition() {
-                  val uri = selectedVideoUri ?: return
-                  val pos = playerVideoView.currentPosition
-                  if (pos > 3000) {
-                      getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
-                          .putInt("POS_" + uri.toString().hashCode(), pos)
-                          .apply()
-                  }
-              }
-
               private fun applyAudioMuteState() {
                   if (isOriginalMuted) {
                       mediaPlayerRef?.setVolume(0f, 0f)
@@ -1845,7 +1814,7 @@ jobs:
 
                               val isBusy = isSpeechActive.get() || (tts?.isSpeaking == true)
 
-                              if (!isBusy && (now - lastSpeechEndTimeMs >= 100L)) {
+                              if (!isBusy && (now - lastSpeechEndTimeMs >= 150L)) {
                                   for (segment in timelineDubQueue) {
                                       if (!segment.isTriggered && curPos >= segment.startMs - 200L) {
                                           if (curPos <= segment.endMs + 3500L) {
@@ -2270,6 +2239,8 @@ jobs:
               }
 
               private fun speakDubbed(text: String, speakerType: String) {
+                  // Insert natural micro-pause and breathing rhythm formatting
+                  val breathedText = text.replace("।", "। ... ").replace(",", " ... ")
                   applyCharacterVoice(speakerType)
                   val volFloat = (volumeSeekBar.progress / 100f).coerceIn(0f, 1f)
                   val params = Bundle().apply {
@@ -2277,7 +2248,7 @@ jobs:
                       putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volFloat)
                   }
                   isSpeechActive.set(true)
-                  tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "dub_${System.currentTimeMillis()}")
+                  tts?.speak(breathedText, TextToSpeech.QUEUE_FLUSH, params, "dub_${System.currentTimeMillis()}")
               }
 
               private fun applyCharacterVoice(speakerType: String) {
@@ -2420,7 +2391,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with perfect Seek-Sync and Dual Subtitles."
+          echo "MainActivity successfully rewritten with emotional voice direction and permanent toggle."
 
       - name: Build Debug APK
         run: |
@@ -2435,5 +2406,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-FlawlessSync-apk
+          name: HindiDubPlayer-EmotionalMasterpiece-apk
           path: "**/build/outputs/apk/debug/*.apk"

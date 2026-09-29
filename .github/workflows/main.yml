@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Fully Resolved Error-Free MainActivity
+      - name: Inject Clean Masterpiece Code without Feedback
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -179,7 +179,6 @@ jobs:
           import android.view.View
           import android.view.WindowManager
           import android.widget.Button
-          import android.widget.EditText
           import android.widget.FrameLayout
           import android.widget.GridLayout
           import android.widget.LinearLayout
@@ -322,7 +321,7 @@ jobs:
 
               private val voiceNames = arrayOf(
                   "🎭 Auto (पात्र अनुसार)",
-                  "🎙️ Man (कड़क मर्द)",
+                  "🎙️️ Man (कड़क मर्द)",
                   "🎙️ Woman (महिला)",
                   "🎙️ Boy (लड़का)",
                   "🎙️ Girl (लड़की)"
@@ -454,118 +453,6 @@ jobs:
                       uiHandler.post {
                           Toast.makeText(this, "🐛 [DEBUG]: $msg", Toast.LENGTH_LONG).show()
                       }
-                  }
-              }
-
-              private fun showFeedbackDialog() {
-                  val layout = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      setPadding(dpToPx(20), dpToPx(16), dpToPx(20), dpToPx(16))
-                      setBackgroundColor(Color.parseColor("#12151F"))
-                  }
-
-                  val nameInput = EditText(this).apply {
-                      hint = "आपका नाम (Your Name)"
-                      setHintTextColor(Color.parseColor("#7A8699"))
-                      setTextColor(Color.WHITE)
-                      background = createCardDrawable(Color.parseColor("#1F2433"), Color.parseColor("#3860F5"), dpToPx(8).toFloat(), dpToPx(1))
-                      setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12))
-                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dpToPx(12) }
-                      layoutParams = p
-                  }
-                  layout.addView(nameInput)
-
-                  val addressInput = EditText(this).apply {
-                      hint = "पता / संपर्क (Address / Mobile)"
-                      setHintTextColor(Color.parseColor("#7A8699"))
-                      setTextColor(Color.WHITE)
-                      background = createCardDrawable(Color.parseColor("#1F2433"), Color.parseColor("#3860F5"), dpToPx(8).toFloat(), dpToPx(1))
-                      setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12))
-                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dpToPx(12) }
-                      layoutParams = p
-                  }
-                  layout.addView(addressInput)
-
-                  val errorDescInput = EditText(this).apply {
-                      hint = "एरर या फीडबैक यहाँ विस्तार से लिखें..."
-                      setHintTextColor(Color.parseColor("#7A8699"))
-                      setTextColor(Color.WHITE)
-                      background = createCardDrawable(Color.parseColor("#1F2433"), Color.parseColor("#3860F5"), dpToPx(8).toFloat(), dpToPx(1))
-                      setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12))
-                      minLines = 4
-                      gravity = Gravity.TOP or Gravity.START
-                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                      layoutParams = p
-                  }
-                  layout.addView(errorDescInput)
-
-                  AlertDialog.Builder(this)
-                      .setTitle("💬 फीडबैक / एरर भेजें")
-                      .setView(layout)
-                      .setPositiveButton("Send (भेजें)") { _, _ ->
-                          val name = nameInput.text.toString().trim()
-                          val addr = addressInput.text.toString().trim()
-                          val errDesc = errorDescInput.text.toString().trim()
-
-                          if (name.isBlank() || errDesc.isBlank()) {
-                              Toast.makeText(this, "कृपया नाम और एरर विवरण भरें!", Toast.LENGTH_SHORT).show()
-                              return@setPositiveButton
-                          }
-
-                          Thread {
-                              sendFeedbackDirectlyToDeveloper(name, addr, errDesc)
-                          }.start()
-                      }
-                      .setNegativeButton("Cancel", null)
-                      .show()
-              }
-
-              private fun sendFeedbackDirectlyToDeveloper(name: String, address: String, description: String) {
-                  try {
-                      val webhookUrl = URL("https://formspree.io/f/manishtomar918@gmail.com")
-                      val conn = (webhookUrl.openConnection() as HttpURLConnection).apply {
-                          requestMethod = "POST"
-                          setRequestProperty("Content-Type", "application/json")
-                          setRequestProperty("Accept", "application/json")
-                          connectTimeout = 8000
-                          readTimeout = 8000
-                          doOutput = true
-                      }
-
-                      val payload = JSONObject().apply {
-                          put("name", name)
-                          put("address_contact", address)
-                          put("message", description)
-                          put("device", Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")")
-                      }
-
-                      conn.outputStream.use { it.write(payload.toString().toByteArray()) }
-
-                      val respCode = conn.responseCode
-                      uiHandler.post {
-                          if (respCode in 200..299) {
-                              Toast.makeText(this, "✅ फीडबैक सफलतापूर्वक डेवलपर को भेज दिया गया!", Toast.LENGTH_LONG).show()
-                          } else {
-                              dispatchDirectEmailIntent(name, address, description)
-                          }
-                      }
-                  } catch (e: Exception) {
-                      uiHandler.post {
-                          dispatchDirectEmailIntent(name, address, description)
-                      }
-                  }
-              }
-
-              private fun dispatchDirectEmailIntent(name: String, address: String, description: String) {
-                  try {
-                      val emailIntent = Intent(Intent.ACTION_SENDTO).apply {
-                          data = Uri.parse("mailto:manishtomar918@gmail.com")
-                          putExtra(Intent.EXTRA_SUBJECT, "New App Feedback from $name")
-                          putExtra(Intent.EXTRA_TEXT, "Name: $name\nContact/Address: $address\n\nFeedback/Error:\n$description")
-                      }
-                      startActivity(Intent.createChooser(emailIntent, "Send Feedback..."))
-                  } catch (e: Exception) {
-                      Toast.makeText(this, "फीडबैक भेजने में त्रुटि: ${e.message}", Toast.LENGTH_SHORT).show()
                   }
               }
 
@@ -703,7 +590,7 @@ jobs:
                   gridLayout.addView(createGridItem("📁", "फ़ाइल ब्राउज़ करें", "(फ़ोन से)") { showScreen(1) })
                   gridLayout.addView(createGridItem("🕒", "Recent Videos", "(हाल के वीडियो)") { showScreen(4) })
                   gridLayout.addView(createGridItem("⚡", "प्लेबैक स्पीड", "(${currentPlaybackSpeed}x गति)") { showSpeedDialog() })
-                  gridLayout.addView(createGridItem("⚙️", "सेटिंग्स", "(भाषा, ऑडियो आदि)") { showScreen(3) })
+                  gridLayout.addView(createGridItem("⚙", "सेटिंग्स", "(भाषा, ऑडियो आदि)") { showScreen(3) })
 
                   viewHome.addView(gridLayout)
               }
@@ -1326,33 +1213,6 @@ jobs:
                   debugRow.addView(switchDebugLog)
                   container.addView(debugRow)
 
-                  val feedbackRow = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
-                      background = createCardDrawable(Color.WHITE, Color.parseColor("#EBF0F8"), dpToPx(12).toFloat(), dpToPx(1))
-                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(14))
-                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(8)
-                      }
-                      layoutParams = p
-                      setOnClickListener { showFeedbackDialog() }
-                  }
-                  val feedbackLbl = TextView(this).apply {
-                      text = "💬 फीडबैक / एरर रिपोर्ट भेजें"
-                      textSize = 14f
-                      setTextColor(Color.parseColor("#222C3D"))
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                  }
-                  feedbackRow.addView(feedbackLbl)
-                  val feedbackAction = TextView(this).apply {
-                      text = "भेजें ›"
-                      textSize = 13f
-                      setTextColor(Color.parseColor("#3860F5"))
-                      setTypeface(null, Typeface.BOLD)
-                  }
-                  feedbackRow.addView(feedbackAction)
-                  container.addView(feedbackRow)
-
                   container.addView(createSectionHeader("ऐप सेटिंग"))
                   settingCacheVal = TextView(this)
                   container.addView(createSettingItem("कैश साफ़ करें", "${sessionCacheMap.size} Dialogues ›", settingCacheVal) {
@@ -1363,7 +1223,7 @@ jobs:
                   })
 
                   container.addView(createSettingItem("हमसे संपर्क करें", "फ़ीडबैक / सपोर्ट ›", TextView(this)) {
-                      showFeedbackDialog()
+                      Toast.makeText(this, "Hindi Dub Player v4.6 • Cleaned Edition", Toast.LENGTH_LONG).show()
                   })
 
                   viewSettings.addView(container)
@@ -1735,7 +1595,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with complete error-free references."
+          echo "MainActivity successfully rewritten without feedback code."
 
       - name: Build Debug APK
         run: |
@@ -1750,5 +1610,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-ErrorFreeBuild-apk
+          name: HindiDubPlayer-CleanBuild-apk
           path: "**/build/outputs/apk/debug/*.apk"

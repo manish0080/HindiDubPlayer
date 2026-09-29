@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Clean and Bulletproof MainActivity
+      - name: Inject Clean and Stable MainActivity
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -177,6 +177,7 @@ jobs:
           import android.speech.tts.Voice
           import android.view.Gravity
           import android.view.View
+          import android.view.WindowInsets
           import android.view.WindowManager
           import android.widget.Button
           import android.widget.FrameLayout
@@ -368,10 +369,18 @@ jobs:
                       )
                   }
 
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                      mainLayout.setOnApplyWindowInsetsListener { v, insets ->
+                          val statusBarHeight = insets.getInsets(WindowInsets.Type.statusBars()).top
+                          v.setPadding(0, statusBarHeight, 0, 0)
+                          insets
+                      }
+                  }
+
                   screenContainer = FrameLayout(this).apply {
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
-                          0,
+                          LinearLayout.LayoutParams.MATCH_PARENT,
                           1f
                       )
                   }

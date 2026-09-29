@@ -36,11 +36,23 @@ jobs:
           fi
 
             - name: Add App Icon
-        run: |
+            Run: |
           echo "Installing Hindi Dub Player launcher icon..."
 
-          RES=$(find . -type d -path '*/src/main/res' | head -1)
-          MANIFEST=$(find . -name "AndroidManifest.xml" | head -1)
+          # Find Android project
+          PROJECT_ROOT=$(find . -name "settings.gradle*" -exec dirname {} \; | head -1)
+
+          if [ -z "$PROJECT_ROOT" ]; then
+            echo "ERROR: Android project not found"
+            exit 1
+          fi
+
+          RES=$(find "$PROJECT_ROOT" -type d -path '*/src/main/res' | head -1)
+          MANIFEST=$(find "$PROJECT_ROOT" -name "AndroidManifest.xml" | head -1)
+
+          echo "PROJECT_ROOT = $PROJECT_ROOT"
+          echo "RES = $RES"
+          echo "MANIFEST = $MANIFEST"
 
           if [ -z "$RES" ]; then
             echo "ERROR: res folder not found"
@@ -57,30 +69,42 @@ jobs:
             exit 1
           fi
 
-          echo "RES = $RES"
-          echo "MANIFEST = $MANIFEST"
+          echo "Creating launcher icon folders..."
 
-          # Create launcher icon folders
+          mkdir -p "$RES/drawable-nodpi"
           mkdir -p "$RES/mipmap-mdpi"
           mkdir -p "$RES/mipmap-hdpi"
           mkdir -p "$RES/mipmap-xhdpi"
           mkdir -p "$RES/mipmap-xxhdpi"
           mkdir -p "$RES/mipmap-xxxhdpi"
+          mkdir -p "$RES/mipmap-anydpi-v26"
 
-          # Copy icon into all launcher density folders
-          cp icon.png "$RES/mipmap-mdpi/app_icon.png"
-          cp icon.png "$RES/mipmap-hdpi/app_icon.png"
-          cp icon.png "$RES/mipmap-xhdpi/app_icon.png"
-          cp icon.png "$RES/mipmap-xxhdpi/app_icon.png"
-          cp icon.png "$RES/mipmap-xxxhdpi/app_icon.png"
+          # Main icon image
+          cp icon.png "$RES/drawable-nodpi/app_icon.png"
 
-          # Remove any old icon reference
+          # Legacy launcher icons
+          cp icon.png "$RES/mipmap-mdpi/ic_launcher.png"
+          cp icon.png "$RES/mipmap-hdpi/ic_launcher.png"
+          cp icon.png "$RES/mipmap-xhdpi/ic_launcher.png"
+          cp icon.png "$RES/mipmap-xxhdpi/ic_launcher.png"
+          cp icon.png "$RES/mipmap-xxxhdpi/ic_launcher.png"
+
+          # Adaptive launcher icon for Android 8+
+          cat > "$RES/mipmap-anydpi-v26/ic_launcher.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@android:color/white" />
+              <foreground android:drawable="@drawable/app_icon" />
+          </adaptive-icon>
+          EOF
+
+          # Remove old icon declaration
           sed -i 's/ android:icon="[^"]*"//g' "$MANIFEST"
 
-          # Add new launcher icon
-          sed -i 's/<application[[:space:]]*/<application android:icon="@mipmap\/app_icon" /' "$MANIFEST"
+          # Add our launcher icon
+          sed -i 's/<application[[:space:]]*/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher" /' "$MANIFEST"
 
-          echo "Checking final manifest:"
+          echo "Final launcher icon configuration:"
           grep -n "application" "$MANIFEST"
 
           echo "Hindi Dub Player launcher icon installed successfully."

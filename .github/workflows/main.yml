@@ -35,6 +35,40 @@ jobs:
             unzip -q "$ZIP_FILE"
           fi
 
+      - name: Add App Icon
+        run: |
+          echo "Adding Hindi Dub Player app icon..."
+
+          RES=$(find . -type d -path '*/src/main/res' | head -1)
+          MANIFEST=$(find . -name "AndroidManifest.xml" | head -1)
+
+          if [ -z "$RES" ]; then
+            echo "res folder not found"
+            exit 1
+          fi
+
+          if [ -z "$MANIFEST" ]; then
+            echo "AndroidManifest.xml not found"
+            exit 1
+          fi
+
+          mkdir -p "$RES/drawable"
+
+          if [ ! -f "icon.png" ]; then
+            echo "icon.png not found in repository root"
+            exit 1
+          fi
+
+          cp "icon.png" "$RES/drawable/app_icon.png"
+
+          sed -i 's/ android:icon="[^"]*"//g' "$MANIFEST"
+
+          sed -i 's#<application #<application android:icon="@drawable/app_icon" #' "$MANIFEST"
+
+          echo "App icon successfully added."
+
+      - name: Add Internet Permission & Orientation Config Fix
+
       - name: Add Internet Permission & Orientation Config Fix
         run: |
           find . -name "AndroidManifest.xml" -exec sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />' {} + || true

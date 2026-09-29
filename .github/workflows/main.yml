@@ -123,14 +123,14 @@ jobs:
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-          print("AndroidManifest.xml updated with full permissions.")
+          print("AndroidManifest.xml patched successfully.")
           PYEOF
 
           find . -name "build.gradle.kts" -exec sed -i '/kotlin.*android/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Complete Working Netflix Dub UI & Studio Voices
+      - name: Final Production Grade Code Injection
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -171,6 +171,7 @@ jobs:
           import android.os.Handler
           import android.os.Looper
           import android.provider.MediaStore
+          import android.provider.OpenableColumns
           import android.speech.tts.TextToSpeech
           import android.speech.tts.UtteranceProgressListener
           import android.speech.tts.Voice
@@ -196,6 +197,8 @@ jobs:
           import java.net.HttpURLConnection
           import java.net.URL
           import java.nio.ByteBuffer
+          import java.text.SimpleDateFormat
+          import java.util.Date
           import java.util.Locale
           import java.util.concurrent.ConcurrentHashMap
           import java.util.concurrent.ConcurrentLinkedQueue
@@ -220,26 +223,23 @@ jobs:
 
           class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
-              private val PERMISSION_REQ_CODE = 6001
+              private val PERMISSION_REQ_CODE = 8001
 
               private lateinit var rootContainer: FrameLayout
               private lateinit var screenContainer: FrameLayout
 
-              // Screens
               private lateinit var viewHome: LinearLayout
               private lateinit var viewPlayer: LinearLayout
               private lateinit var viewBrowser: LinearLayout
               private lateinit var viewSettings: ScrollView
               private lateinit var viewHistory: LinearLayout
 
-              // Home View Components
               private lateinit var homeSelectVideoBtn: Button
               private lateinit var homeSubTitleText: TextView
-
-              // Video Browser Components
               private lateinit var browserListContainer: LinearLayout
+              private lateinit var historyListContainer: LinearLayout
+              private lateinit var historyEmptyView: TextView
 
-              // Player View Components
               private lateinit var playerVideoView: VideoView
               private lateinit var playerContainer: FrameLayout
               private lateinit var playerSubtitleText: TextView
@@ -252,7 +252,6 @@ jobs:
               private lateinit var volumeSeekBar: SeekBar
               private lateinit var volumePercentText: TextView
 
-              // Settings Labels
               private lateinit var settingSourceLangVal: TextView
               private lateinit var settingTargetLangVal: TextView
               private lateinit var settingStyleVal: TextView
@@ -260,7 +259,6 @@ jobs:
               private lateinit var settingSpeedVal: TextView
               private lateinit var settingCacheVal: TextView
 
-              // Bottom Navigation
               private lateinit var bottomNavBar: LinearLayout
               private lateinit var navItemHome: LinearLayout
               private lateinit var navItemHistory: LinearLayout
@@ -278,7 +276,7 @@ jobs:
               private val isSeeking = AtomicBoolean(false)
               private val seekTargetMs = AtomicLong(-1L)
               private var isFullscreen = false
-              private var activeTab = 0 // 0: Home, 1: Browser, 2: Player, 3: Settings, 4: History
+              private var activeTab = 0
 
               private val timelineDubQueue = ConcurrentLinkedQueue<TimestampDubSegment>()
               private val sessionCacheMap = ConcurrentHashMap<Long, TimestampDubSegment>()
@@ -436,20 +434,19 @@ jobs:
                   }
               }
 
-              // UI Screen 1: Home Screen
               private fun buildHomeScreen() {
                   viewHome = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
                       setBackgroundColor(Color.parseColor("#F6F9FD"))
-                      setPadding(dpToPx(18), dpToPx(16), dpToPx(18), dpToPx(12))
+                      setPadding(dpToPx(18), dpToPx(16), dpToPx(18), dpToPx(8))
                   }
 
                   val headerRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(20)
+                          bottomMargin = dpToPx(18)
                       }
                       layoutParams = p
                   }
@@ -493,33 +490,32 @@ jobs:
                   headerRow.addView(settingsGearBtn)
                   viewHome.addView(headerRow)
 
-                  // Primary Video Selection Card
                   val mainPickCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
                       background = createCardDrawable(Color.WHITE, Color.parseColor("#E5ECF6"), dpToPx(20).toFloat(), dpToPx(1))
-                      setPadding(dpToPx(20), dpToPx(28), dpToPx(20), dpToPx(28))
+                      setPadding(dpToPx(20), dpToPx(24), dpToPx(20), dpToPx(24))
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(24)
+                          bottomMargin = dpToPx(20)
                       }
                       layoutParams = p
                   }
 
                   val clapperIcon = TextView(this).apply {
                       text = "🎬"
-                      textSize = 42f
+                      textSize = 40f
                       gravity = Gravity.CENTER
                   }
                   mainPickCard.addView(clapperIcon)
 
                   val cardHeading = TextView(this).apply {
                       text = "वीडियो चुनें"
-                      textSize = 19f
+                      textSize = 18f
                       setTypeface(null, Typeface.BOLD)
                       setTextColor(Color.parseColor("#1E2738"))
                       gravity = Gravity.CENTER
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          topMargin = dpToPx(10)
+                          topMargin = dpToPx(8)
                           bottomMargin = dpToPx(4)
                       }
                       layoutParams = p
@@ -532,7 +528,7 @@ jobs:
                       setTextColor(Color.parseColor("#8290A4"))
                       gravity = Gravity.CENTER
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(18)
+                          bottomMargin = dpToPx(16)
                       }
                       layoutParams = p
                   }
@@ -544,7 +540,7 @@ jobs:
                       setTypeface(null, Typeface.BOLD)
                       setTextColor(Color.WHITE)
                       background = createRoundedDrawable(Color.parseColor("#3860F5"), dpToPx(12).toFloat())
-                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48))
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(46))
                       layoutParams = p
                       setOnClickListener { openVideoPicker() }
                   }
@@ -553,11 +549,11 @@ jobs:
 
                   val gridLabel = TextView(this).apply {
                       text = "या कुछ विकल्प चुनें"
-                      textSize = 15f
+                      textSize = 14f
                       setTypeface(null, Typeface.BOLD)
                       setTextColor(Color.parseColor("#1C2333"))
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(12)
+                          bottomMargin = dpToPx(10)
                       }
                       layoutParams = p
                   }
@@ -582,19 +578,19 @@ jobs:
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
                       background = createCardDrawable(Color.WHITE, Color.parseColor("#E7EEF8"), dpToPx(16).toFloat(), dpToPx(1))
-                      setPadding(dpToPx(14), dpToPx(16), dpToPx(14), dpToPx(16))
+                      setPadding(dpToPx(14), dpToPx(14), dpToPx(14), dpToPx(14))
                       val params = GridLayout.LayoutParams().apply {
                           width = 0
                           height = GridLayout.LayoutParams.WRAP_CONTENT
                           columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                          setMargins(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+                          setMargins(dpToPx(5), dpToPx(5), dpToPx(5), dpToPx(5))
                       }
                       layoutParams = params
                       setOnClickListener { onClick() }
 
                       val iView = TextView(this@MainActivity).apply {
                           text = icon
-                          textSize = 24f
+                          textSize = 22f
                           gravity = Gravity.CENTER
                       }
                       addView(iView)
@@ -605,7 +601,7 @@ jobs:
                           setTypeface(null, Typeface.BOLD)
                           setTextColor(Color.parseColor("#222C3D"))
                           gravity = Gravity.CENTER
-                          setPadding(0, dpToPx(6), 0, 0)
+                          setPadding(0, dpToPx(5), 0, 0)
                       }
                       addView(tView)
 
@@ -619,7 +615,6 @@ jobs:
                   }
               }
 
-              // UI Screen 2: Video Browser
               private fun buildBrowserScreen() {
                   viewBrowser = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -693,7 +688,7 @@ jobs:
                           textSize = 13f
                           setTextColor(Color.parseColor("#7A8699"))
                           gravity = Gravity.CENTER
-                          setPadding(0, dpToPx(30), 0, 0)
+                          setPadding(0, dpToPx(40), 0, 0)
                       }
                       browserListContainer.addView(emptyMsg)
                   }
@@ -789,7 +784,6 @@ jobs:
                   return list
               }
 
-              // UI Screen 3: Video Player Screen
               private fun buildPlayerScreen() {
                   viewPlayer = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -849,7 +843,6 @@ jobs:
                   playerContainer.addView(playerSubtitleText)
                   viewPlayer.addView(playerContainer)
 
-                  // Controller Row: Seeker + Controls
                   val controlSection = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(16))
@@ -943,7 +936,6 @@ jobs:
                   controlSection.addView(btnRow)
                   viewPlayer.addView(controlSection)
 
-                  // Audio Settings Card
                   val audioCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = createCardDrawable(Color.parseColor("#171A24"), Color.parseColor("#252A3A"), dpToPx(16).toFloat(), dpToPx(1))
@@ -1062,7 +1054,6 @@ jobs:
                   viewPlayer.addView(audioCard)
               }
 
-              // UI Screen 4: Settings Screen (Fully Working)
               private fun buildSettingsScreen() {
                   viewSettings = ScrollView(this).apply {
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
@@ -1100,7 +1091,6 @@ jobs:
                   topRow.addView(title)
                   container.addView(topRow)
 
-                  // 1. Language Settings
                   container.addView(createSectionHeader("भाषा सेटिंग"))
                   settingSourceLangVal = TextView(this)
                   container.addView(createSettingItem("मूल भाषा (Video Language)", "$sourceLangName ⌄", settingSourceLangVal) {
@@ -1112,7 +1102,6 @@ jobs:
                       showTargetLanguageDialog()
                   })
 
-                  // 2. Audio & Dubbing Settings
                   container.addView(createSectionHeader("ऑडियो एवं डबिंग सेटिंग"))
                   settingStyleVal = TextView(this)
                   val styleTitle = if (dubStyleKey == "netflix") "🎬 नेटफ्लिक्स" else if (dubStyleKey == "hinglish") "🍿 हिंग्लिश" else "📖 फॉर्मल"
@@ -1130,7 +1119,6 @@ jobs:
                       showSpeedDialog()
                   })
 
-                  // 3. App Settings
                   container.addView(createSectionHeader("ऐप सेटिंग"))
                   container.addView(createSettingItem("डिफ़ॉल्ट प्लेयर", "VLC (Recommended) ›", TextView(this)) {
                       Toast.makeText(this, "Internal VLC-Style Media Engine Active", Toast.LENGTH_SHORT).show()
@@ -1145,13 +1133,12 @@ jobs:
                   })
 
                   container.addView(createSettingItem("हमसे संपर्क करें", "फ़ीडबैक / सपोर्ट ›", TextView(this)) {
-                      Toast.makeText(this, "Hindi Dub Player v2.6 • Developed with ❤️", Toast.LENGTH_LONG).show()
+                      Toast.makeText(this, "Hindi Dub Player v3.1 • Premium AI Cinema Voice", Toast.LENGTH_LONG).show()
                   })
 
                   viewSettings.addView(container)
               }
 
-              // UI Screen 5: History Screen
               private fun buildHistoryScreen() {
                   viewHistory = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -1167,7 +1154,7 @@ jobs:
                       setTypeface(null, Typeface.BOLD)
                       setTextColor(Color.parseColor("#1C2333"))
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(16)
+                          bottomMargin = dpToPx(14)
                       }
                       layoutParams = p
                   }
@@ -1176,7 +1163,7 @@ jobs:
                   val tabRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(16)
+                          bottomMargin = dpToPx(14)
                       }
                       layoutParams = p
                   }
@@ -1193,7 +1180,7 @@ jobs:
                   tabRow.addView(tabDubbed)
 
                   val tabMy = Button(this).apply {
-                      text = "मेरे वीडियो"
+                      text = "फ़ोन वीडियो"
                       textSize = 12f
                       setTextColor(Color.parseColor("#5F6E82"))
                       background = createCardDrawable(Color.WHITE, Color.parseColor("#DFE6F0"), dpToPx(18).toFloat(), dpToPx(1))
@@ -1207,18 +1194,91 @@ jobs:
                   val listScroll = ScrollView(this).apply {
                       layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
                   }
-                  val listCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                  historyListContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-                  listCol.addView(createHistoryItem("Interstellar.mp4", "आज • 2:49:05"))
-                  listCol.addView(createHistoryItem("The Batman.mp4", "कल • 2:56:12"))
-                  listCol.addView(createHistoryItem("Anime Movie.mp4", "25 सित • 1:42:33"))
-                  listCol.addView(createHistoryItem("Nature Documentary.mp4", "24 सित • 1:12:17"))
+                  historyEmptyView = TextView(this).apply {
+                      text = "अभी तक आपने कोई वीडियो नहीं देखा है।\nहोम पेज से कोई वीडियो चलाएं!"
+                      textSize = 13f
+                      setTextColor(Color.parseColor("#8E9DAE"))
+                      gravity = Gravity.CENTER
+                      setPadding(0, dpToPx(60), 0, 0)
+                      visibility = View.VISIBLE
+                  }
+                  historyListContainer.addView(historyEmptyView)
 
-                  listScroll.addView(listCol)
+                  listScroll.addView(historyListContainer)
                   viewHistory.addView(listScroll)
               }
 
-              // Dialogs for Working Settings
+              private fun addVideoToHistory(uri: Uri) {
+                  val name = getFileNameFromUri(uri)
+                  val dateStr = SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()).format(Date())
+                  val prefs = getSharedPreferences("DubHistory", Context.MODE_PRIVATE)
+
+                  val historyRaw = prefs.getString("HISTORY_ITEMS", "[]") ?: "[]"
+                  val arr = JSONArray(historyRaw)
+
+                  val newObj = JSONObject().apply {
+                      put("uri", uri.toString())
+                      put("name", name)
+                      put("time", dateStr)
+                  }
+
+                  val newArr = JSONArray()
+                  newArr.put(newObj)
+                  for (i in 0 until arr.length()) {
+                      val item = arr.getJSONObject(i)
+                      if (item.optString("uri") != uri.toString()) {
+                          newArr.put(item)
+                      }
+                      if (newArr.length() >= 30) break
+                  }
+                  prefs.edit().putString("HISTORY_ITEMS", newArr.toString()).apply()
+              }
+
+              private fun populateRealHistory() {
+                  historyListContainer.removeAllViews()
+                  val prefs = getSharedPreferences("DubHistory", Context.MODE_PRIVATE)
+                  val historyRaw = prefs.getString("HISTORY_ITEMS", "[]") ?: "[]"
+                  val arr = JSONArray(historyRaw)
+
+                  if (arr.length() == 0) {
+                      historyEmptyView.visibility = View.VISIBLE
+                      historyListContainer.addView(historyEmptyView)
+                  } else {
+                      historyEmptyView.visibility = View.GONE
+                      for (i in 0 until arr.length()) {
+                          val item = arr.getJSONObject(i)
+                          val uriStr = item.optString("uri")
+                          val name = item.optString("name")
+                          val time = item.optString("time")
+
+                          val row = createHistoryItem(name, time) {
+                              try {
+                                  val uri = Uri.parse(uriStr)
+                                  playSelectedUri(uri)
+                              } catch (_: Exception) {
+                                  Toast.makeText(this, "फ़ाइल नहीं मिल सकी", Toast.LENGTH_SHORT).show()
+                              }
+                          }
+                          historyListContainer.addView(row)
+                      }
+                  }
+              }
+
+              private fun getFileNameFromUri(uri: Uri): String {
+                  var name = "Video.mp4"
+                  try {
+                      contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                          val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                          if (nameIndex != -1 && cursor.moveToFirst()) {
+                              name = cursor.getString(nameIndex) ?: "Video.mp4"
+                          }
+                      }
+                  } catch (_: Exception) {}
+                  return name
+              }
+
               private fun showTargetLanguageDialog() {
                   val names = availableLanguages.map { it.first }.toTypedArray()
                   AlertDialog.Builder(this)
@@ -1239,7 +1299,7 @@ jobs:
                           resolveStudioVoices()
                           timelineDubQueue.clear()
                           sessionCacheMap.clear()
-                          Toast.makeText(this, "Dubbing Language: $targetLangName", Toast.LENGTH_SHORT).show()
+                          Toast.makeText(this, "Language: $targetLangName", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
                       .show()
@@ -1357,7 +1417,7 @@ jobs:
                   }
               }
 
-              private fun createHistoryItem(name: String, time: String): LinearLayout {
+              private fun createHistoryItem(name: String, time: String, onPlayClick: () -> Unit): LinearLayout {
                   return LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -1398,21 +1458,22 @@ jobs:
                           text = "▶"
                           textSize = 16f
                           setTextColor(Color.parseColor("#3860F5"))
-                          setPadding(dpToPx(8), 0, dpToPx(8), 0)
+                          setPadding(dpToPx(10), dpToPx(4), dpToPx(10), dpToPx(4))
                       }
                       addView(playBtn)
+                      setOnClickListener { onPlayClick() }
                   }
               }
 
-              // Perfectly Distributed Bottom Navigation Bar (1:1:1 Equal Ratio)
+              // Perfectly Distributed & Elevation Fixed Bottom Navigation
               private fun buildBottomNavigation() {
                   bottomNavBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       setBackgroundColor(Color.WHITE)
-                      setPadding(0, dpToPx(6), 0, dpToPx(6))
-                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(62))
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(66))
                       layoutParams = p
                       weightSum = 3f
+                      elevation = dpToPx(8).toFloat()
                   }
 
                   navItemHome = LinearLayout(this).apply {
@@ -1421,8 +1482,8 @@ jobs:
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
                       setOnClickListener { showScreen(0) }
                   }
-                  val iconHome = TextView(this).apply { text = "🏠"; textSize = 18f }
-                  navLabelHome = TextView(this).apply { text = "होम"; textSize = 11f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor("#3860F5")) }
+                  val iconHome = TextView(this).apply { text = "🏠"; textSize = 19f; gravity = Gravity.CENTER }
+                  navLabelHome = TextView(this).apply { text = "होम"; textSize = 11f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor("#3860F5")) }
                   navItemHome.addView(iconHome)
                   navItemHome.addView(navLabelHome)
                   bottomNavBar.addView(navItemHome)
@@ -1433,8 +1494,8 @@ jobs:
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
                       setOnClickListener { showScreen(4) }
                   }
-                  val iconHistory = TextView(this).apply { text = "🕒"; textSize = 18f }
-                  navLabelHistory = TextView(this).apply { text = "इतिहास"; textSize = 11f; setTextColor(Color.parseColor("#8A98A8")) }
+                  val iconHistory = TextView(this).apply { text = "🕒"; textSize = 19f; gravity = Gravity.CENTER }
+                  navLabelHistory = TextView(this).apply { text = "इतिहास"; textSize = 11f; gravity = Gravity.CENTER; setTextColor(Color.parseColor("#8A98A8")) }
                   navItemHistory.addView(iconHistory)
                   navItemHistory.addView(navLabelHistory)
                   bottomNavBar.addView(navItemHistory)
@@ -1445,8 +1506,8 @@ jobs:
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
                       setOnClickListener { showScreen(1) }
                   }
-                  val iconVideos = TextView(this).apply { text = "🔖"; textSize = 18f }
-                  navLabelVideos = TextView(this).apply { text = "मेरे वीडियो"; textSize = 11f; setTextColor(Color.parseColor("#8A98A8")) }
+                  val iconVideos = TextView(this).apply { text = "🔖"; textSize = 19f; gravity = Gravity.CENTER }
+                  navLabelVideos = TextView(this).apply { text = "मेरे वीडियो"; textSize = 11f; gravity = Gravity.CENTER; setTextColor(Color.parseColor("#8A98A8")) }
                   navItemVideos.addView(iconVideos)
                   navItemVideos.addView(navLabelVideos)
                   bottomNavBar.addView(navItemVideos)
@@ -1462,6 +1523,8 @@ jobs:
 
                   if (index == 1) {
                       populateDeviceVideos()
+                  } else if (index == 4) {
+                      populateRealHistory()
                   }
 
                   bottomNavBar.visibility = if (index == 2) View.GONE else View.VISIBLE
@@ -1473,6 +1536,7 @@ jobs:
 
               private fun playSelectedUri(uri: Uri) {
                   selectedVideoUri = uri
+                  addVideoToHistory(uri)
                   playerVideoView.setVideoURI(uri)
                   showScreen(2)
                   startDubbingProcess(uri)
@@ -1648,7 +1712,6 @@ jobs:
                                           if (curPos <= segment.endMs + 3500L) {
                                               val norm = segment.translatedText.trim().lowercase()
 
-                                              // Stop repeated loops
                                               val isRecentlySpoken = recentSpokenTexts.any {
                                                   (it.first == norm || calculateSimilarity(it.first, norm) > 0.8) && (now - it.second < 12000L)
                                               }
@@ -1775,15 +1838,17 @@ jobs:
 
                                   for (i in rawSegments.indices) {
                                       val seg = rawSegments[i]
-                                      val transObj = if (i < translated.size) translated[i] else ("" to "man")
-                                      val clean = cleanDialogue(transObj.first)
-
-                                      if (clean.isNotBlank()) {
-                                          val absStart = extractStart + seg.startMs
-                                          val absEnd = extractStart + seg.endMs
-                                          val newSeg = TimestampDubSegment(absStart, absEnd, seg.originalText, clean, transObj.second)
-                                          sessionCacheMap[absStart] = newSeg
-                                          timelineDubQueue.add(newSeg)
+                                      val transObj = if (i < translated.size) translated[i] else null
+                                      
+                                      if (transObj != null && transObj.first.isNotBlank()) {
+                                          val clean = cleanDialogue(transObj.first)
+                                          if (clean.isNotBlank()) {
+                                              val absStart = extractStart + seg.startMs
+                                              val absEnd = extractStart + seg.endMs
+                                              val newSeg = TimestampDubSegment(absStart, absEnd, seg.originalText, clean, transObj.second)
+                                              sessionCacheMap[absStart] = newSeg
+                                              timelineDubQueue.add(newSeg)
+                                          }
                                       }
                                   }
 
@@ -1903,14 +1968,16 @@ jobs:
                               val start = (item.optDouble("start", 0.0) * 1000.0).toLong()
                               val end = (item.optDouble("end", 0.0) * 1000.0).toLong().coerceAtLeast(start + 1000L)
                               val text = item.optString("text", "").trim()
-                              if (text.length >= 3) list.add(TimestampDubSegment(start, end, text, ""))
+                              if (text.length >= 3 && !text.contains("subtitles by", true) && !text.contains("thank you for watching", true)) {
+                                  list.add(TimestampDubSegment(start, end, text, ""))
+                              }
                           }
                       }
                   }
                   return list
               }
 
-              // True Netflix/Crunchyroll Anime Dub Director Prompt
+              // True Netflix/Crunchyroll Anime Dub Director Prompt (Zero Fallback Loop)
               private fun translateBatch(texts: List<String>, targetLang: String, style: String, apiKey: String): List<Pair<String, String>> {
                   if (texts.isEmpty()) return emptyList()
 
@@ -1925,14 +1992,14 @@ jobs:
                   1. NEVER output English script or return original English lines! Everything must be translated into natural Devanagari script.
                   2. STRICT GENDER-VERB INFLECTION:
                      - Tag speaker accurately: 'woman' (or 'girl') if female, 'man' (or 'boy') if male.
-                     - Female speaker MUST use strictly feminine grammar: ('करती हूँ', 'जा रही हूँ', 'सोचती हूँ', 'बताऊँगी', 'मेरी', 'खुश हूँ'). NEVER use masculine verbs ('करता हूँ', 'जा रहा हूँ') for female characters!
+                     - Female speaker MUST use strictly feminine grammar: ('करती हूँ', 'जा रही हूँ', 'सोचती हूँ', 'बताऊँगी', 'मेरी', 'खुश हूँ'). NEVER use masculine verbs for female characters!
                      - Male speaker MUST use strictly masculine grammar: ('करता हूँ', 'जा रहा हूँ', 'सोचता हूँ', 'बताऊँगा', 'मेरा').
                   3. NATURAL CINEMATIC VOCABULARY:
                      - BAN archaic bookish words ('भूभाग', 'जटिल', 'प्रतीक्षा', 'प्रस्थान', 'कदापि', 'सामर्थ्य', 'अवश्य').
                      - Use real natural conversational words in Devanagari:
                        'एरिया', 'प्रॉब्लम', 'टेंशन', 'आइडिया', 'वेट', 'सीरियस', 'प्लान', 'लोकेशन', 'चेक', 'ट्रैक', 'रेडी', 'फोकस', 'चांस', 'कॉम्प्लिकेटेड', 'इम्पॉसिबल', 'सॉरी', 'थैंक यू', 'प्लीज', 'ओके', 'कम ऑन', 'लेट्स गो', 'बॉस', 'गाइज', 'डेंजरस', 'मिस', 'कॉल', 'मैसेज', 'फोन', 'टीम'.
                   4. Output ONLY a valid JSON array of objects:
-                     [{"text": "अरे सुनो, यह एरिया सच में बहुत कॉम्प्लिकेटेड लग रहा है।", "speaker": "man"}]
+                     [{"text": "अनुवादित हिंदी संवाद।", "speaker": "man"}]
                   No explanation, no markdown backticks, only pure JSON.
                   """.trimIndent()
 
@@ -1976,7 +2043,7 @@ jobs:
                       }
                   } catch (_: Exception) {}
 
-                  return texts.map { "यह बात सुनो।" to "man" }
+                  return emptyList()
               }
 
               private fun cleanDialogue(raw: String): String {
@@ -2006,7 +2073,6 @@ jobs:
                   tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "dub_${System.currentTimeMillis()}")
               }
 
-              // Natural Studio Human Voice without Synthetic Pitch Distortion
               private fun applyCharacterVoice(speakerType: String) {
                   val effectiveRole = if (voiceTypeIndex == 0) {
                       speakerType.lowercase()
@@ -2024,7 +2090,6 @@ jobs:
                   if (isFemale && cachedFemaleVoice != null) tts?.voice = cachedFemaleVoice
                   else if (cachedMaleVoice != null) tts?.voice = cachedMaleVoice
 
-                  // Pitch strictly 1.0f for crystal clear natural human voice
                   tts?.setPitch(1.0f)
                   tts?.setSpeechRate(1.06f * currentPlaybackSpeed)
               }
@@ -2145,7 +2210,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully updated with complete working UI and Netflix Dub pipeline."
+          echo "MainActivity successfully rewritten with all fixes and permanent Netflix dub engine."
 
       - name: Build Debug APK
         run: |
@@ -2160,5 +2225,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-WorkingNetflixUI-apk
+          name: HindiDubPlayer-FinalProduction-apk
           path: "**/build/outputs/apk/debug/*.apk"

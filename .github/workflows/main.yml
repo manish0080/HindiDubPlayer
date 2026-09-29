@@ -52,17 +52,8 @@ jobs:
           RES=$(find "$PROJECT_ROOT" -type d -path '*/src/main/res' | head -1)
           MANIFEST=$(find "$PROJECT_ROOT" -name "AndroidManifest.xml" | head -1)
 
-          echo "PROJECT_ROOT = $PROJECT_ROOT"
-          echo "RES = $RES"
-          echo "MANIFEST = $MANIFEST"
-
-          if [ -z "$RES" ]; then
-            echo "ERROR: res folder not found"
-            exit 1
-          fi
-
-          if [ -z "$MANIFEST" ]; then
-            echo "ERROR: AndroidManifest.xml not found"
+          if [ -z "$RES" ] || [ -z "$MANIFEST" ]; then
+            echo "ERROR: res or AndroidManifest.xml not found"
             exit 1
           fi
 
@@ -70,8 +61,6 @@ jobs:
             echo "ERROR: icon.png not found in repository root"
             exit 1
           fi
-
-          echo "Creating launcher icon folders..."
 
           mkdir -p "$RES/drawable-nodpi"
           mkdir -p "$RES/mipmap-mdpi"
@@ -82,7 +71,6 @@ jobs:
           mkdir -p "$RES/mipmap-anydpi-v26"
 
           cp icon.png "$RES/drawable-nodpi/app_icon.png"
-
           cp icon.png "$RES/mipmap-mdpi/ic_launcher.png"
           cp icon.png "$RES/mipmap-hdpi/ic_launcher.png"
           cp icon.png "$RES/mipmap-xhdpi/ic_launcher.png"
@@ -100,17 +88,31 @@ jobs:
           sed -i 's/ android:icon="[^"]*"//g' "$MANIFEST"
           sed -i 's/<application[[:space:]]*/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher" /' "$MANIFEST"
 
-          echo "Hindi Dub Player launcher icon installed successfully."
-
-      - name: Add Internet Permission & Orientation Config Fix
+      - name: Robust AndroidManifest & Build Fix
         run: |
-          find . -name "AndroidManifest.xml" -exec sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />' {} + || true
-          find . -name "AndroidManifest.xml" -exec sed -i 's/<activity /<activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize" /g' {} + || true
+          python3 - << 'PYEOF'
+          import glob, re
+
+          for path in glob.glob("**/AndroidManifest.xml", recursive=True):
+              with open(path, "r", encoding="utf-8") as f:
+                  content = f.read()
+
+              if "android.permission.INTERNET" not in content:
+                  content = re.sub(r"(<application\b)", r'    <uses-permission android:name="android.permission.INTERNET" />\n\1', content)
+
+              content = re.sub(r'\s*android:configChanges="[^"]*"', '', content)
+              content = re.sub(r'<activity(\s+)', r'<activity android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode" \1', content)
+
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(content)
+          print("AndroidManifest.xml patched successfully with configChanges.")
+          PYEOF
+
           find . -name "build.gradle.kts" -exec sed -i '/kotlin.*android/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Add Enhanced VLC Style SeekBar & TranslateTube UI
+      - name: Add Enhanced Modern VLC-Style Player & UI
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -129,6 +131,7 @@ jobs:
           import android.content.Context
           import android.content.Intent
           import android.content.pm.ActivityInfo
+          import android.content.res.Configuration
           import android.graphics.Color
           import android.graphics.Typeface
           import android.graphics.drawable.GradientDrawable
@@ -146,7 +149,9 @@ jobs:
           import android.os.Looper
           import android.speech.tts.TextToSpeech
           import android.speech.tts.UtteranceProgressListener
+          import android.view.GestureDetector
           import android.view.Gravity
+          import android.view.MotionEvent
           import android.view.View
           import android.view.WindowManager
           import android.widget.Button
@@ -187,11 +192,23 @@ jobs:
               private lateinit var videoView: VideoView
               private lateinit var mainScrollView: ScrollView
               private lateinit var centerStartBtn: Button
-              private lateinit var fullscreenBtn: Button
-              private lateinit var playPauseBtn: Button
-              private lateinit var videoSeekBar: SeekBar
-              private lateinit var timeStatusView: TextView
-              
+
+              private lateinit var playerControlsOverlay: FrameLayout
+              private lateinit var touchOverlayView: View
+              private lateinit var centerIndicatorBadge: TextView
+              private lateinit var topBarOverlay: LinearLayout
+              private lateinit var topBarBackBtn: Button
+              private lateinit var topBarTitleView: TextView
+              private lateinit var bottomControlsBar: LinearLayout
+
+              private lateinit var centerControlsRow: LinearLayout
+              private lateinit var onScreenRewBtn: Button
+              private lateinit var onScreenPlayPauseBtn: Button
+              private lateinit var onScreenFwdBtn: Button
+              private lateinit var onScreenSeekBar: SeekBar
+              private lateinit var onScreenTimeStatusView: TextView
+              private lateinit var onScreenFullscreenBtn: Button
+
               private lateinit var originalTitleView: TextView
               private lateinit var originalContentView: TextView
               private lateinit var translatedTitleView: TextView
@@ -228,9 +245,19 @@ jobs:
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
-              private var voiceTypeIndex = 0 
+              private var voiceTypeIndex = 0
               private var dubStyleKey = "emotional"
               private var currentPlaybackSpeed = 1.0f
+
+              private lateinit var audioManager: AudioManager
+              private var maxVolume = 15
+              private var gestureMode = 0
+              private var touchStartX = 0f
+              private var touchStartY = 0f
+              private var initialVolume = 0
+              private var initialBrightness = 0.5f
+              private var initialSeekPos = 0L
+              private var targetGestureSeekPos = 0L
 
               private val availableLanguages = arrayOf(
                   "Hindi (हिन्दी)" to ("hi" to "Hindi"),
@@ -272,11 +299,23 @@ jobs:
 
               private val groqApiKey = "gsk_BNe4A96j6NLA" + "dcvlcAkAWGdyb3FY" + "itxb1szvztxpo3hH" + "1bQydBza"
 
+              private val hideControlsRunnable = Runnable {
+                  if (videoView.isPlaying) {
+                      playerControlsOverlay.visibility = View.GONE
+                  }
+              }
+
+              private val hideIndicatorRunnable = Runnable {
+                  centerIndicatorBadge.visibility = View.GONE
+              }
+
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
                   window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                   volumeControlStream = AudioManager.STREAM_MUSIC
+                  audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                  maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                   tts = TextToSpeech(this, this)
 
                   purgeSessionTempFiles()
@@ -289,7 +328,7 @@ jobs:
                   currentPlaybackSpeed = prefs.getFloat("PLAY_SPEED", 1.0f)
 
                   val rootFrame = FrameLayout(this).apply {
-                      setBackgroundColor(Color.parseColor("#F8F9FA"))
+                      setBackgroundColor(Color.parseColor("#0F1015"))
                   }
 
                   val mainVerticalLayout = LinearLayout(this).apply {
@@ -300,11 +339,12 @@ jobs:
                       )
                   }
 
+                  // 240dp modern height for 16:9 mobile view in portrait mode
                   videoContainer = FrameLayout(this).apply {
                       setBackgroundColor(Color.BLACK)
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
-                          dpToPx(210)
+                          dpToPx(240)
                       )
                   }
 
@@ -317,29 +357,45 @@ jobs:
                   }
                   videoContainer.addView(videoView)
 
+                  touchOverlayView = View(this).apply {
+                      layoutParams = FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.MATCH_PARENT
+                      )
+                  }
+                  videoContainer.addView(touchOverlayView)
+
                   fullscreenSubtitleView = TextView(this).apply {
                       textSize = 15f
-                      setTextColor(Color.YELLOW)
-                      setBackgroundColor(Color.parseColor("#99000000"))
+                      setTextColor(Color.parseColor("#FFD54F"))
+                      setTypeface(null, Typeface.BOLD)
+                      background = createRoundedDrawable(Color.parseColor("#CC121212"), dpToPx(10).toFloat())
                       gravity = Gravity.CENTER
-                      setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8))
+                      setPadding(dpToPx(18), dpToPx(8), dpToPx(18), dpToPx(8))
                       visibility = View.GONE
                       val params = FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
                           FrameLayout.LayoutParams.WRAP_CONTENT,
                           Gravity.BOTTOM
-                      )
-                      params.bottomMargin = dpToPx(12)
+                      ).apply {
+                          marginStart = dpToPx(24)
+                          marginEnd = dpToPx(24)
+                          bottomMargin = dpToPx(68)
+                      }
                       layoutParams = params
                   }
                   videoContainer.addView(fullscreenSubtitleView)
 
+                  buildOnScreenPlayerControls()
+                  videoContainer.addView(playerControlsOverlay)
+
                   centerStartBtn = Button(this).apply {
                       text = "▶ START LIVE DUBBING"
-                      textSize = 14f
+                      textSize = 13f
                       setTextColor(Color.WHITE)
+                      setTypeface(null, Typeface.BOLD)
                       background = createRoundedDrawable(Color.parseColor("#FF5722"), dpToPx(24).toFloat())
-                      setPadding(dpToPx(20), dpToPx(10), dpToPx(20), dpToPx(10))
+                      setPadding(dpToPx(22), dpToPx(12), dpToPx(22), dpToPx(12))
                       visibility = View.GONE
                       layoutParams = FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -355,37 +411,7 @@ jobs:
                   videoContainer.addView(centerStartBtn)
                   mainVerticalLayout.addView(videoContainer)
 
-                  val seekerBarLayout = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      setBackgroundColor(Color.parseColor("#121212"))
-                      setPadding(dpToPx(14), dpToPx(6), dpToPx(14), dpToPx(8))
-                  }
-
-                  videoSeekBar = SeekBar(this).apply {
-                      layoutParams = LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      )
-                      progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#FF5722"))
-                      thumbTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#FF5722"))
-                  }
-                  seekerBarLayout.addView(videoSeekBar)
-
-                  val timeInfoRow = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
-                  }
-
-                  timeStatusView = TextView(this).apply {
-                      text = "00:00 / 00:00"
-                      textSize = 12f
-                      setTextColor(Color.parseColor("#CFD8DC"))
-                      setTypeface(null, Typeface.BOLD)
-                  }
-                  timeInfoRow.addView(timeStatusView)
-                  seekerBarLayout.addView(timeInfoRow)
-                  mainVerticalLayout.addView(seekerBarLayout)
-
+                  // Content view below video container
                   mainScrollView = ScrollView(this).apply {
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
@@ -393,135 +419,16 @@ jobs:
                           1f
                       )
                       isFillViewport = true
+                      setBackgroundColor(Color.parseColor("#F5F7FA"))
                   }
 
                   val cardsContainer = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setPadding(dpToPx(14), dpToPx(12), dpToPx(14), dpToPx(16))
+                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(20))
                   }
 
-                  val actionRow = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
-                  }
-
-                  val openVideoBtn = Button(this).apply {
-                      text = "📁 Open Video"
-                      textSize = 12f
-                      setTextColor(Color.WHITE)
-                      background = createRoundedDrawable(Color.parseColor("#37474F"), dpToPx(8).toFloat())
-                      setPadding(dpToPx(14), dpToPx(6), dpToPx(14), dpToPx(6))
-                      setOnClickListener { openVideoPicker() }
-                  }
-                  actionRow.addView(openVideoBtn)
-
-                  val spacer = View(this).apply {
-                      layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
-                  }
-                  actionRow.addView(spacer)
-
-                  val rewBtn = Button(this).apply {
-                      text = "⏪ 10s"
-                      textSize = 11f
-                      background = createRoundedDrawable(Color.parseColor("#ECEFF1"), dpToPx(8).toFloat())
-                      setTextColor(Color.parseColor("#37474F"))
-                      setOnClickListener {
-                          val newPos = (videoView.currentPosition - 10000).coerceAtLeast(0)
-                          handleSeekTo(newPos.toLong())
-                          videoView.seekTo(newPos)
-                      }
-                  }
-                  actionRow.addView(rewBtn)
-
-                  playPauseBtn = Button(this).apply {
-                      text = "⏯"
-                      textSize = 13f
-                      background = createRoundedDrawable(Color.parseColor("#ECEFF1"), dpToPx(8).toFloat())
-                      setTextColor(Color.parseColor("#37474F"))
-                      val params = LinearLayout.LayoutParams(dpToPx(44), dpToPx(38)).apply {
-                          marginStart = dpToPx(6)
-                          marginEnd = dpToPx(6)
-                      }
-                      layoutParams = params
-                      setOnClickListener {
-                          if (videoView.isPlaying) {
-                              videoView.pause()
-                              tts?.stop()
-                              isSpeechActive.set(false)
-                              saveCurrentPosition()
-                              statusBadge.text = "Paused"
-                          } else {
-                              mediaPlayerRef?.setVolume(0f, 0f)
-                              applyVideoPlaybackSpeed()
-                              videoView.start()
-                              statusBadge.text = "Playing"
-                          }
-                      }
-                  }
-                  actionRow.addView(playPauseBtn)
-
-                  val fwdBtn = Button(this).apply {
-                      text = "10s ⏩"
-                      textSize = 11f
-                      background = createRoundedDrawable(Color.parseColor("#ECEFF1"), dpToPx(8).toFloat())
-                      setTextColor(Color.parseColor("#37474F"))
-                      setOnClickListener {
-                          val newPos = (videoView.currentPosition + 10000).coerceAtMost(videoView.duration)
-                          handleSeekTo(newPos.toLong())
-                          videoView.seekTo(newPos)
-                      }
-                  }
-                  actionRow.addView(fwdBtn)
-
-                  fullscreenBtn = Button(this).apply {
-                      text = "⛶"
-                      textSize = 13f
-                      background = createRoundedDrawable(Color.parseColor("#FF5722"), dpToPx(8).toFloat())
-                      setTextColor(Color.WHITE)
-                      val params = LinearLayout.LayoutParams(dpToPx(40), dpToPx(38)).apply {
-                          marginStart = dpToPx(6)
-                      }
-                      layoutParams = params
-                      setOnClickListener { toggleFullscreen() }
-                  }
-                  actionRow.addView(fullscreenBtn)
-                  cardsContainer.addView(actionRow)
-
-                  val pillScroller = HorizontalScrollView(this).apply {
-                      isHorizontalScrollBarEnabled = false
-                      val params = LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      ).apply {
-                          topMargin = dpToPx(12)
-                          bottomMargin = dpToPx(12)
-                      }
-                      layoutParams = params
-                  }
-
-                  val pillRow = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                  }
-
-                  langPillBtn = createPillButton("🌐 $targetLangName ▼") { showLanguageSelector() }
-                  pillRow.addView(langPillBtn)
-
-                  voicePillBtn = createPillButton(if (voiceTypeIndex == 0) "🎭 Auto Voice ▼" else voiceNames[voiceTypeIndex].split(" ")[1] + " ▼") { showVoiceSelector() }
-                  pillRow.addView(voicePillBtn)
-
-                  speedPillBtn = createPillButton("⚡ ${currentPlaybackSpeed}x ▼") { showSpeedSelector() }
-                  pillRow.addView(speedPillBtn)
-
-                  stylePillBtn = createPillButton(if (dubStyleKey == "emotional") "🎭 इमोशनल ▼" else "📖 किताबी ▼") { showStyleSelector() }
-                  pillRow.addView(stylePillBtn)
-
-                  val settingsPill = createPillButton("⚙️ Settings") { showSettingsDialog() }
-                  pillRow.addView(settingsPill)
-
-                  pillScroller.addView(pillRow)
-                  cardsContainer.addView(pillScroller)
-
-                  val infoBar = LinearLayout(this).apply {
+                  // Modern Action Header (Open Video + Status)
+                  val modernHeaderRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                       val params = LinearLayout.LayoutParams(
@@ -533,33 +440,102 @@ jobs:
                       layoutParams = params
                   }
 
-                  statusBadge = TextView(this).apply {
-                      text = "Ready"
-                      textSize = 11f
-                      setTextColor(Color.parseColor("#455A64"))
+                  val openVideoBtn = Button(this).apply {
+                      text = "📂 Open Video"
+                      textSize = 12f
                       setTypeface(null, Typeface.BOLD)
+                      setTextColor(Color.WHITE)
+                      background = createRoundedDrawable(Color.parseColor("#263238"), dpToPx(10).toFloat())
+                      setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8))
+                      setOnClickListener { openVideoPicker() }
                   }
-                  infoBar.addView(statusBadge)
+                  modernHeaderRow.addView(openVideoBtn)
 
-                  val spacerInfo = View(this).apply {
+                  val spacerHeader = View(this).apply {
                       layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
                   }
-                  infoBar.addView(spacerInfo)
+                  modernHeaderRow.addView(spacerHeader)
 
                   speakerTagBadge = TextView(this).apply {
-                      text = "CHARACTER: NONE"
+                      text = "ROLE: NONE"
                       textSize = 10f
                       setTextColor(Color.WHITE)
-                      background = createRoundedDrawable(Color.parseColor("#78909C"), dpToPx(4).toFloat())
-                      setPadding(dpToPx(8), dpToPx(2), dpToPx(8), dpToPx(2))
+                      background = createRoundedDrawable(Color.parseColor("#607D8B"), dpToPx(6).toFloat())
+                      setPadding(dpToPx(10), dpToPx(4), dpToPx(10), dpToPx(4))
                       visibility = View.GONE
                   }
-                  infoBar.addView(speakerTagBadge)
-                  cardsContainer.addView(infoBar)
+                  modernHeaderRow.addView(speakerTagBadge)
+                  cardsContainer.addView(modernHeaderRow)
 
+                  // Quick Pill Carousel
+                  val pillScroller = HorizontalScrollView(this).apply {
+                      isHorizontalScrollBarEnabled = false
+                      val params = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      ).apply {
+                          bottomMargin = dpToPx(12)
+                      }
+                      layoutParams = params
+                  }
+
+                  val pillRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                  }
+
+                  langPillBtn = createModernPill("🌐 $targetLangName ▼") { showLanguageSelector() }
+                  pillRow.addView(langPillBtn)
+
+                  voicePillBtn = createModernPill(if (voiceTypeIndex == 0) "🎭 Auto Voice ▼" else voiceNames[voiceTypeIndex].split(" ")[1] + " ▼") { showVoiceSelector() }
+                  pillRow.addView(voicePillBtn)
+
+                  speedPillBtn = createModernPill("⚡ ${currentPlaybackSpeed}x ▼") { showSpeedSelector() }
+                  pillRow.addView(speedPillBtn)
+
+                  stylePillBtn = createModernPill(if (dubStyleKey == "emotional") "🎭 इमोशनल ▼" else "📖 किताबी ▼") { showStyleSelector() }
+                  pillRow.addView(stylePillBtn)
+
+                  val settingsPill = createModernPill("⚙️ Settings") { showSettingsDialog() }
+                  pillRow.addView(settingsPill)
+
+                  pillScroller.addView(pillRow)
+                  cardsContainer.addView(pillScroller)
+
+                  // Status Indicator Row
+                  val statusRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      val params = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      ).apply {
+                          bottomMargin = dpToPx(12)
+                      }
+                      layoutParams = params
+                  }
+
+                  val liveDot = View(this).apply {
+                      background = createRoundedDrawable(Color.parseColor("#4CAF50"), dpToPx(8).toFloat())
+                      val p = LinearLayout.LayoutParams(dpToPx(8), dpToPx(8)).apply {
+                          marginEnd = dpToPx(8)
+                      }
+                      layoutParams = p
+                  }
+                  statusRow.addView(liveDot)
+
+                  statusBadge = TextView(this).apply {
+                      text = "Select a video to begin live dubbing"
+                      textSize = 12f
+                      setTextColor(Color.parseColor("#546E7A"))
+                      setTypeface(null, Typeface.BOLD)
+                  }
+                  statusRow.addView(statusBadge)
+                  cardsContainer.addView(statusRow)
+
+                  // Card 1: Original Subtitles
                   val originalCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      background = createCardDrawable(Color.WHITE, Color.parseColor("#CFD8DC"), dpToPx(14).toFloat(), dpToPx(1))
+                      background = createCardDrawable(Color.WHITE, Color.parseColor("#E0E4E8"), dpToPx(14).toFloat(), dpToPx(1))
                       setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(16))
                       val params = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
@@ -573,7 +549,7 @@ jobs:
                   originalTitleView = TextView(this).apply {
                       text = "ORIGINAL DIALOGUE"
                       textSize = 11f
-                      setTextColor(Color.parseColor("#90A4AE"))
+                      setTextColor(Color.parseColor("#78909C"))
                       setTypeface(null, Typeface.BOLD)
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                           bottomMargin = dpToPx(6)
@@ -583,17 +559,18 @@ jobs:
                   originalCard.addView(originalTitleView)
 
                   originalContentView = TextView(this).apply {
-                      text = "Open a video to view recognized subtitles."
-                      textSize = 15f
-                      setTextColor(Color.parseColor("#263238"))
+                      text = "Tap on 'Open Video' to load recognized dialogue subtitles."
+                      textSize = 14f
+                      setTextColor(Color.parseColor("#37474F"))
                       setLineSpacing(4f, 1.15f)
                   }
                   originalCard.addView(originalContentView)
                   cardsContainer.addView(originalCard)
 
+                  // Card 2: Dubbed Hindi Output
                   val translatedCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      background = createCardDrawable(Color.parseColor("#FFF8E1"), Color.parseColor("#FFE082"), dpToPx(14).toFloat(), dpToPx(1))
+                      background = createCardDrawable(Color.parseColor("#FFF9F0"), Color.parseColor("#FFE0B2"), dpToPx(14).toFloat(), dpToPx(1))
                       setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(16))
                       val params = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
@@ -607,7 +584,7 @@ jobs:
                   translatedTitleView = TextView(this).apply {
                       text = "HINDI DUBBING ($targetLangName)"
                       textSize = 11f
-                      setTextColor(Color.parseColor("#FF8F00"))
+                      setTextColor(Color.parseColor("#F57C00"))
                       setTypeface(null, Typeface.BOLD)
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                           bottomMargin = dpToPx(6)
@@ -617,11 +594,11 @@ jobs:
                   translatedCard.addView(translatedTitleView)
 
                   translatedContentView = TextView(this).apply {
-                      text = "Dubbing will stream here with natural flow."
+                      text = "Dubbed audio stream and text will display here naturally."
                       textSize = 16f
                       setTextColor(Color.parseColor("#BF360C"))
                       setTypeface(null, Typeface.BOLD)
-                      setLineSpacing(4f, 1.2f)
+                      setLineSpacing(4f, 1.25f)
                   }
                   translatedCard.addView(translatedContentView)
                   cardsContainer.addView(translatedCard)
@@ -632,30 +609,14 @@ jobs:
 
                   setContentView(rootFrame)
 
-                  videoSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                      override fun onStartTrackingTouch(seekBar: SeekBar?) {
-                          isUserTouchingSeekBar = true
-                      }
-
-                      override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                          isUserTouchingSeekBar = false
-                          val targetPos = seekBar?.progress ?: 0
-                          videoView.seekTo(targetPos)
-                          handleSeekTo(targetPos.toLong())
-                      }
-
-                      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                          if (fromUser) {
-                              timeStatusView.text = "${formatTime(progress.toLong())} / ${formatTime(videoView.duration.toLong())}"
-                          }
-                      }
-                  })
+                  setupSeekBarListeners()
+                  setupVlcGestures()
 
                   videoView.setOnPreparedListener { mp ->
                       mediaPlayerRef = mp
                       mp.setVolume(0f, 0f)
                       applyVideoPlaybackSpeed()
-                      videoSeekBar.max = videoView.duration
+                      onScreenSeekBar.max = videoView.duration
 
                       mp.setOnSeekCompleteListener {
                           mediaPlayerRef?.setVolume(0f, 0f)
@@ -667,6 +628,418 @@ jobs:
 
                   startTimestampConsumerLoop()
                   startSeekBarUpdater()
+              }
+
+              private fun buildOnScreenPlayerControls() {
+                  playerControlsOverlay = FrameLayout(this).apply {
+                      layoutParams = FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.MATCH_PARENT
+                      )
+                      setBackgroundColor(Color.parseColor("#55000000"))
+                      visibility = View.GONE
+                  }
+
+                  // Center Gesture HUD Badge
+                  centerIndicatorBadge = TextView(this).apply {
+                      textSize = 15f
+                      setTextColor(Color.WHITE)
+                      setTypeface(null, Typeface.BOLD)
+                      background = createRoundedDrawable(Color.parseColor("#E6181818"), dpToPx(12).toFloat())
+                      gravity = Gravity.CENTER
+                      setPadding(dpToPx(20), dpToPx(10), dpToPx(20), dpToPx(10))
+                      visibility = View.GONE
+                      val params = FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.WRAP_CONTENT,
+                          FrameLayout.LayoutParams.WRAP_CONTENT,
+                          Gravity.CENTER
+                      )
+                      layoutParams = params
+                  }
+                  playerControlsOverlay.addView(centerIndicatorBadge)
+
+                  // Top Overlay Bar (Title & Back)
+                  topBarOverlay = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      setBackgroundColor(Color.parseColor("#80000000"))
+                      setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6))
+                      val params = FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.WRAP_CONTENT,
+                          Gravity.TOP
+                      )
+                      layoutParams = params
+                  }
+
+                  topBarBackBtn = Button(this).apply {
+                      text = "← Back"
+                      textSize = 12f
+                      setTextColor(Color.WHITE)
+                      background = createRoundedDrawable(Color.parseColor("#37474F"), dpToPx(6).toFloat())
+                      setPadding(dpToPx(12), dpToPx(2), dpToPx(12), dpToPx(2))
+                      visibility = View.GONE
+                      setOnClickListener {
+                          if (isFullscreen) exitFullscreen()
+                      }
+                  }
+                  topBarOverlay.addView(topBarBackBtn)
+
+                  topBarTitleView = TextView(this).apply {
+                      text = "  HindiDub Player"
+                      textSize = 13f
+                      setTextColor(Color.WHITE)
+                      setTypeface(null, Typeface.BOLD)
+                  }
+                  topBarOverlay.addView(topBarTitleView)
+                  playerControlsOverlay.addView(topBarOverlay)
+
+                  // Center Floating Playback Controls (Rewind | Play/Pause | Forward)
+                  centerControlsRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER
+                      val params = FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.WRAP_CONTENT,
+                          FrameLayout.LayoutParams.WRAP_CONTENT,
+                          Gravity.CENTER
+                      )
+                      layoutParams = params
+                  }
+
+                  onScreenRewBtn = Button(this).apply {
+                      text = "↺ 10"
+                      textSize = 13f
+                      setTextColor(Color.WHITE)
+                      setTypeface(null, Typeface.BOLD)
+                      background = createRoundedDrawable(Color.parseColor("#66FFFFFF"), dpToPx(25).toFloat())
+                      val params = LinearLayout.LayoutParams(dpToPx(50), dpToPx(50)).apply {
+                          marginEnd = dpToPx(20)
+                      }
+                      layoutParams = params
+                      setOnClickListener {
+                          val newPos = (videoView.currentPosition - 10000).coerceAtLeast(0)
+                          handleSeekTo(newPos.toLong())
+                          videoView.seekTo(newPos)
+                          showCenterIndicator("⏪ -10s")
+                          touchResetOverlayTimer()
+                      }
+                  }
+                  centerControlsRow.addView(onScreenRewBtn)
+
+                  onScreenPlayPauseBtn = Button(this).apply {
+                      text = "⏯"
+                      textSize = 18f
+                      setTextColor(Color.WHITE)
+                      background = createRoundedDrawable(Color.parseColor("#FF5722"), dpToPx(30).toFloat())
+                      val params = LinearLayout.LayoutParams(dpToPx(60), dpToPx(60))
+                      layoutParams = params
+                      setOnClickListener {
+                          togglePlayPause()
+                          touchResetOverlayTimer()
+                      }
+                  }
+                  centerControlsRow.addView(onScreenPlayPauseBtn)
+
+                  onScreenFwdBtn = Button(this).apply {
+                      text = "10 ↻"
+                      textSize = 13f
+                      setTextColor(Color.WHITE)
+                      setTypeface(null, Typeface.BOLD)
+                      background = createRoundedDrawable(Color.parseColor("#66FFFFFF"), dpToPx(25).toFloat())
+                      val params = LinearLayout.LayoutParams(dpToPx(50), dpToPx(50)).apply {
+                          marginStart = dpToPx(20)
+                      }
+                      layoutParams = params
+                      setOnClickListener {
+                          val newPos = (videoView.currentPosition + 10000).coerceAtMost(videoView.duration)
+                          handleSeekTo(newPos.toLong())
+                          videoView.seekTo(newPos)
+                          showCenterIndicator("⏩ +10s")
+                          touchResetOverlayTimer()
+                      }
+                  }
+                  centerControlsRow.addView(onScreenFwdBtn)
+                  playerControlsOverlay.addView(centerControlsRow)
+
+                  // Bottom On-Screen Bar (Time | SeekBar | Fullscreen Toggle)
+                  bottomControlsBar = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      setBackgroundColor(Color.parseColor("#99000000"))
+                      setPadding(dpToPx(14), dpToPx(4), dpToPx(12), dpToPx(6))
+                      val params = FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.WRAP_CONTENT,
+                          Gravity.BOTTOM
+                      )
+                      layoutParams = params
+                  }
+
+                  onScreenTimeStatusView = TextView(this).apply {
+                      text = "00:00 / 00:00"
+                      textSize = 11f
+                      setTextColor(Color.WHITE)
+                      setTypeface(null, Typeface.BOLD)
+                      setPadding(0, 0, dpToPx(8), 0)
+                  }
+                  bottomControlsBar.addView(onScreenTimeStatusView)
+
+                  onScreenSeekBar = SeekBar(this).apply {
+                      val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      layoutParams = params
+                      progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#FF5722"))
+                      thumbTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#FF5722"))
+                  }
+                  bottomControlsBar.addView(onScreenSeekBar)
+
+                  onScreenFullscreenBtn = Button(this).apply {
+                      text = "⛶"
+                      textSize = 14f
+                      setTextColor(Color.WHITE)
+                      background = createRoundedDrawable(Color.TRANSPARENT, dpToPx(6).toFloat())
+                      val params = LinearLayout.LayoutParams(dpToPx(38), dpToPx(34)).apply {
+                          marginStart = dpToPx(6)
+                      }
+                      layoutParams = params
+                      setOnClickListener {
+                          toggleFullscreen()
+                          touchResetOverlayTimer()
+                      }
+                  }
+                  bottomControlsBar.addView(onScreenFullscreenBtn)
+
+                  playerControlsOverlay.addView(bottomControlsBar)
+              }
+
+              private fun setupSeekBarListeners() {
+                  onScreenSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                          isUserTouchingSeekBar = true
+                          uiHandler.removeCallbacks(hideControlsRunnable)
+                      }
+
+                      override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                          isUserTouchingSeekBar = false
+                          val targetPos = seekBar?.progress ?: 0
+                          videoView.seekTo(targetPos)
+                          handleSeekTo(targetPos.toLong())
+                          touchResetOverlayTimer()
+                      }
+
+                      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                          if (fromUser) {
+                              val total = videoView.duration.toLong()
+                              onScreenTimeStatusView.text = "${formatTime(progress.toLong())} / ${formatTime(total)}"
+                          }
+                      }
+                  })
+              }
+
+              private fun setupVlcGestures() {
+                  val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+                      override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                          toggleOverlayControls()
+                          return true
+                      }
+
+                      override fun onDoubleTap(e: MotionEvent): Boolean {
+                          val width = touchOverlayView.width.toFloat()
+                          if (width <= 0f) return false
+                          val x = e.x
+
+                          if (x < width * 0.35f) {
+                              val newPos = (videoView.currentPosition - 10000).coerceAtLeast(0)
+                              handleSeekTo(newPos.toLong())
+                              videoView.seekTo(newPos)
+                              showCenterIndicator("⏪ -10s")
+                          } else if (x > width * 0.65f) {
+                              val newPos = (videoView.currentPosition + 10000).coerceAtMost(videoView.duration)
+                              handleSeekTo(newPos.toLong())
+                              videoView.seekTo(newPos)
+                              showCenterIndicator("⏩ +10s")
+                          } else {
+                              togglePlayPause()
+                          }
+                          return true
+                      }
+                  })
+
+                  touchOverlayView.setOnTouchListener { v, event ->
+                      gestureDetector.onTouchEvent(event)
+                      val width = v.width.toFloat()
+                      val height = v.height.toFloat()
+
+                      when (event.action) {
+                          MotionEvent.ACTION_DOWN -> {
+                              touchStartX = event.x
+                              touchStartY = event.y
+                              gestureMode = 0
+                              initialVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                              val lp = window.attributes
+                              initialBrightness = if (lp.screenBrightness < 0) 0.5f else lp.screenBrightness
+                              initialSeekPos = videoView.currentPosition.toLong()
+                              targetGestureSeekPos = initialSeekPos
+                          }
+                          MotionEvent.ACTION_MOVE -> {
+                              val dx = event.x - touchStartX
+                              val dy = event.y - touchStartY
+
+                              if (gestureMode == 0) {
+                                  if (Math.abs(dx) > dpToPx(20) && Math.abs(dx) > Math.abs(dy)) {
+                                      gestureMode = 3
+                                  } else if (Math.abs(dy) > dpToPx(20) && Math.abs(dy) > Math.abs(dx)) {
+                                      gestureMode = if (touchStartX < width * 0.5f) 2 else 1
+                                  }
+                              }
+
+                              if (gestureMode == 1) {
+                                  val deltaVol = ((-dy / height) * maxVolume * 1.4f).toInt()
+                                  val newVol = (initialVolume + deltaVol).coerceIn(0, maxVolume)
+                                  audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVol, 0)
+                                  val percent = (newVol * 100) / maxVolume
+                                  showCenterIndicator("🔊 Volume: $percent%")
+                              } else if (gestureMode == 2) {
+                                  val delta = (-dy / height) * 1.2f
+                                  val newB = (initialBrightness + delta).coerceIn(0.01f, 1.0f)
+                                  val lp = window.attributes
+                                  lp.screenBrightness = newB
+                                  window.attributes = lp
+                                  val percent = (newB * 100).toInt()
+                                  showCenterIndicator("☀️ Brightness: $percent%")
+                              } else if (gestureMode == 3) {
+                                  val totalDuration = videoView.duration.toLong().coerceAtLeast(1L)
+                                  val deltaMs = ((dx / width) * 90000L).toLong()
+                                  targetGestureSeekPos = (initialSeekPos + deltaMs).coerceIn(0L, totalDuration)
+                                  val sign = if (deltaMs >= 0) "+" else ""
+                                  showCenterIndicator("⏱ ${formatTime(targetGestureSeekPos)} (${sign}${deltaMs / 1000}s)")
+                              }
+                          }
+                          MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                              if (gestureMode == 3 && targetGestureSeekPos >= 0) {
+                                  videoView.seekTo(targetGestureSeekPos.toInt())
+                                  handleSeekTo(targetGestureSeekPos)
+                              }
+                              gestureMode = 0
+                              uiHandler.postDelayed(hideIndicatorRunnable, 1000)
+                          }
+                      }
+                      true
+                  }
+              }
+
+              private fun showCenterIndicator(text: String) {
+                  centerIndicatorBadge.text = text
+                  centerIndicatorBadge.visibility = View.VISIBLE
+                  uiHandler.removeCallbacks(hideIndicatorRunnable)
+                  uiHandler.postDelayed(hideIndicatorRunnable, 1000)
+              }
+
+              private fun toggleOverlayControls() {
+                  if (playerControlsOverlay.visibility == View.VISIBLE) {
+                      playerControlsOverlay.visibility = View.GONE
+                      uiHandler.removeCallbacks(hideControlsRunnable)
+                  } else {
+                      showOverlayControls()
+                  }
+              }
+
+              private fun showOverlayControls() {
+                  playerControlsOverlay.visibility = View.VISIBLE
+                  touchResetOverlayTimer()
+              }
+
+              private fun touchResetOverlayTimer() {
+                  uiHandler.removeCallbacks(hideControlsRunnable)
+                  uiHandler.postDelayed(hideControlsRunnable, 3500)
+              }
+
+              private fun togglePlayPause() {
+                  if (videoView.isPlaying) {
+                      videoView.pause()
+                      tts?.stop()
+                      isSpeechActive.set(false)
+                      saveCurrentPosition()
+                      statusBadge.text = "Paused"
+                      onScreenPlayPauseBtn.text = "▶"
+                      showCenterIndicator("⏸ Paused")
+                      uiHandler.removeCallbacks(hideControlsRunnable)
+                  } else {
+                      mediaPlayerRef?.setVolume(0f, 0f)
+                      applyVideoPlaybackSpeed()
+                      videoView.start()
+                      statusBadge.text = "Playing ($targetLangName)"
+                      onScreenPlayPauseBtn.text = "⏸"
+                      showCenterIndicator("▶ Playing")
+                      touchResetOverlayTimer()
+                  }
+              }
+
+              private fun enterFullscreen() {
+                  isFullscreen = true
+                  requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                      window.decorView.systemUiVisibility = (
+                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                          or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                          or View.SYSTEM_UI_FLAG_FULLSCREEN
+                          or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                          or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                          or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                      )
+                  }
+
+                  mainScrollView.visibility = View.GONE
+                  videoContainer.layoutParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.MATCH_PARENT
+                  )
+
+                  topBarBackBtn.visibility = View.VISIBLE
+                  fullscreenSubtitleView.visibility = View.VISIBLE
+                  onScreenFullscreenBtn.text = "⤓"
+
+                  showOverlayControls()
+              }
+
+              private fun exitFullscreen() {
+                  isFullscreen = false
+                  requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+
+                  window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+
+                  mainScrollView.visibility = View.VISIBLE
+                  videoContainer.layoutParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      dpToPx(240)
+                  )
+
+                  topBarBackBtn.visibility = View.GONE
+                  fullscreenSubtitleView.visibility = View.GONE
+                  onScreenFullscreenBtn.text = "⛶"
+
+                  showOverlayControls()
+              }
+
+              private fun toggleFullscreen() {
+                  if (isFullscreen) exitFullscreen() else enterFullscreen()
+              }
+
+              override fun onBackPressed() {
+                  if (isFullscreen) {
+                      exitFullscreen()
+                  } else {
+                      super.onBackPressed()
+                  }
+              }
+
+              override fun onConfigurationChanged(newConfig: Configuration) {
+                  super.onConfigurationChanged(newConfig)
+                  if (newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                      if (!isFullscreen) enterFullscreen()
+                  } else if (newConfig.orientation == Configuration.ORIENTATION_PORTRAIT) {
+                      if (isFullscreen) exitFullscreen()
+                  }
               }
 
               private fun dpToPx(dp: Int): Int {
@@ -690,20 +1063,21 @@ jobs:
                   }
               }
 
-              private fun createPillButton(title: String, onClick: () -> Unit): Button {
+              private fun createModernPill(title: String, onClick: () -> Unit): Button {
                   return Button(this).apply {
                       text = title
-                      textSize = 10f
+                      textSize = 11f
                       setTextColor(Color.parseColor("#37474F"))
+                      setTypeface(null, Typeface.BOLD)
                       background = createCardDrawable(Color.WHITE, Color.parseColor("#CFD8DC"), dpToPx(16).toFloat(), dpToPx(1))
                       val params = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.WRAP_CONTENT,
-                          dpToPx(34)
+                          dpToPx(36)
                       ).apply {
                           marginEnd = dpToPx(8)
                       }
                       layoutParams = params
-                      setPadding(dpToPx(12), 0, dpToPx(12), 0)
+                      setPadding(dpToPx(14), 0, dpToPx(14), 0)
                       setOnClickListener { onClick() }
                   }
               }
@@ -715,45 +1089,14 @@ jobs:
                               val currentPos = videoView.currentPosition
                               val totalDuration = videoView.duration
                               if (totalDuration > 0) {
-                                  videoSeekBar.max = totalDuration
-                                  videoSeekBar.progress = currentPos
-                                  timeStatusView.text = "${formatTime(currentPos.toLong())} / ${formatTime(totalDuration.toLong())}"
+                                  onScreenSeekBar.max = totalDuration
+                                  onScreenSeekBar.progress = currentPos
+                                  onScreenTimeStatusView.text = "${formatTime(currentPos.toLong())} / ${formatTime(totalDuration.toLong())}"
                               }
                           }
                           uiHandler.postDelayed(this, 300)
                       }
                   }, 300)
-              }
-
-              private fun toggleFullscreen() {
-                  isFullscreen = !isFullscreen
-                  if (isFullscreen) {
-                      requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                      window.decorView.systemUiVisibility = (
-                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                          or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                          or View.SYSTEM_UI_FLAG_FULLSCREEN
-                          or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                          or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                      )
-                      mainScrollView.visibility = View.GONE
-                      videoContainer.layoutParams = LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.MATCH_PARENT
-                      )
-                      fullscreenSubtitleView.visibility = View.VISIBLE
-                      fullscreenBtn.text = "⤓"
-                  } else {
-                      requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                      window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
-                      mainScrollView.visibility = View.VISIBLE
-                      videoContainer.layoutParams = LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          dpToPx(210)
-                      )
-                      fullscreenSubtitleView.visibility = View.GONE
-                      fullscreenBtn.text = "⛶"
-                  }
               }
 
               private fun purgeSessionTempFiles() {
@@ -795,6 +1138,7 @@ jobs:
                       mediaPlayerRef?.setVolume(0f, 0f)
                       applyVideoPlaybackSpeed()
                       videoView.start()
+                      onScreenPlayPauseBtn.text = "⏸"
                       statusBadge.text = "⚡ Instant Cache Playback (${currentPlaybackSpeed}x)"
                   } else {
                       videoView.pause()
@@ -937,16 +1281,16 @@ jobs:
                       val voices = tts?.voices ?: emptySet()
                       val langVoices = voices.filter { it.locale.language.equals(targetLangCode, ignoreCase = true) }
 
-                      val maleVoice = langVoices.firstOrNull { 
-                          it.name.contains("male", true) || 
-                          it.name.contains("hid", true) || 
+                      val maleVoice = langVoices.firstOrNull {
+                          it.name.contains("male", true) ||
+                          it.name.contains("hid", true) ||
                           it.name.contains("hie", true) ||
                           it.name.contains("man", true)
                       } ?: langVoices.firstOrNull { it.name.contains("d-local", true) || it.name.contains("e-local", true) }
 
-                      val femaleVoice = langVoices.firstOrNull { 
-                          it.name.contains("female", true) || 
-                          it.name.contains("hic", true) || 
+                      val femaleVoice = langVoices.firstOrNull {
+                          it.name.contains("female", true) ||
+                          it.name.contains("hic", true) ||
                           it.name.contains("hia", true) ||
                           it.name.contains("woman", true)
                       } ?: langVoices.firstOrNull { it.name.contains("c-local", true) || it.name.contains("a-local", true) }
@@ -1096,11 +1440,13 @@ jobs:
                                   videoView.seekTo(savedPos)
                                   statusBadge.text = "Resumed at ${formatTime(savedPos.toLong())}"
                                   centerStartBtn.visibility = View.VISIBLE
+                                  showOverlayControls()
                               }
                               .setNegativeButton("Start from beginning") { _, _ ->
                                   videoView.seekTo(1)
                                   statusBadge.text = "Video loaded"
                                   centerStartBtn.visibility = View.VISIBLE
+                                  showOverlayControls()
                               }
                               .setCancelable(false)
                               .show()
@@ -1108,6 +1454,7 @@ jobs:
                           videoView.seekTo(1)
                           statusBadge.text = "Ready to start live dubbing"
                           centerStartBtn.visibility = View.VISIBLE
+                          showOverlayControls()
                       }
                   }
               }
@@ -1141,7 +1488,7 @@ jobs:
                                           if (curPos <= segment.endMs + 3500L) {
                                               segment.isTriggered = true
                                               currentlyPlayingSegment = segment
-                                              
+
                                               originalContentView.text = segment.originalText
                                               translatedContentView.text = segment.translatedText
                                               fullscreenSubtitleView.text = segment.translatedText
@@ -1149,7 +1496,7 @@ jobs:
                                               speakerTagBadge.visibility = View.VISIBLE
                                               speakerTagBadge.text = "SPEAKER: ${segment.speakerType.uppercase()}"
                                               statusBadge.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
-                                              
+
                                               speakDubbed(segment.translatedText, segment.speakerType)
                                               break
                                           } else {
@@ -1375,6 +1722,7 @@ jobs:
                                       mediaPlayerRef?.setVolume(0f, 0f)
                                       applyVideoPlaybackSpeed()
                                       videoView.start()
+                                      onScreenPlayPauseBtn.text = "⏸"
                                       statusBadge.text = "⚡ Instant Cache Loaded ($targetLangName)"
                                   }
                               }
@@ -1419,7 +1767,7 @@ jobs:
                                           val absStart = extractStart + seg.startMs
                                           val absEnd = extractStart + seg.endMs
                                           val newSeg = TimestampDubSegment(absStart, absEnd, seg.originalText, translated, speaker)
-                                          
+
                                           sessionCacheMap[absStart] = newSeg
                                           timelineDubQueue.add(newSeg)
                                       }
@@ -1431,6 +1779,7 @@ jobs:
                                           mediaPlayerRef?.setVolume(0f, 0f)
                                           applyVideoPlaybackSpeed()
                                           videoView.start()
+                                          onScreenPlayPauseBtn.text = "⏸"
                                           statusBadge.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
                                       }
                                   }
@@ -1440,6 +1789,7 @@ jobs:
                                           isSeeking.set(false)
                                           applyVideoPlaybackSpeed()
                                           videoView.start()
+                                          onScreenPlayPauseBtn.text = "⏸"
                                           statusBadge.text = "Playing (Music/Silence)"
                                       }
                                   }
@@ -1450,6 +1800,7 @@ jobs:
                                       isSeeking.set(false)
                                       applyVideoPlaybackSpeed()
                                       videoView.start()
+                                      onScreenPlayPauseBtn.text = "⏸"
                                   }
                               }
                           }
@@ -1681,7 +2032,7 @@ jobs:
               private fun cleanTextForDubbing(text: String, langCode: String): String {
                   var res = text.trim()
                   res = res.replace(Regex("[*\"#_]"), "")
-                  
+
                   if (langCode == "hi") {
                       res = res.replace(Regex("[a-zA-Z]"), "")
                       res = res.replace(Regex("[\u0600-\u06FF]"), "")
@@ -1716,7 +2067,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with Fixed VLC SeekBar"
+          echo "MainActivity rewritten with On-Screen VLC controls and modern UI layout"
 
       - name: Build Debug APK
         run: |
@@ -1731,5 +2082,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-VLCSeekBar-apk
+          name: HindiDubPlayer-ModernUI-apk
           path: "**/build/outputs/apk/debug/*.apk"

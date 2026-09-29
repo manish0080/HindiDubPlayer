@@ -88,7 +88,7 @@ jobs:
           sed -i 's/ android:icon="[^"]*"//g' "$MANIFEST"
           sed -i 's/<application[[:space:]]*/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher" /' "$MANIFEST"
 
-      - name: Robust AndroidManifest, Queries & Build Fix
+      - name: Robust AndroidManifest, Permissions & Queries Fix
         run: |
           python3 - << 'PYEOF'
           import glob, re
@@ -97,8 +97,17 @@ jobs:
               with open(path, "r", encoding="utf-8") as f:
                   content = f.read()
 
-              if "android.permission.INTERNET" not in content:
-                  content = re.sub(r"(<application\b)", r'    <uses-permission android:name="android.permission.INTERNET" />\n\1', content)
+              permissions = [
+                  '<uses-permission android:name="android.permission.INTERNET" />',
+                  '<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />',
+                  '<uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />',
+                  '<uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />',
+                  '<uses-permission android:name="android.permission.WAKE_LOCK" />'
+              ]
+
+              perm_block = "\n    ".join(permissions) + "\n"
+              content = re.sub(r"(<uses-permission[^>]*>\s*)+", "", content)
+              content = re.sub(r"(<application\b)", perm_block + r"\1", content)
 
               if "<queries>" not in content:
                   queries_block = """    <queries>
@@ -114,14 +123,14 @@ jobs:
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-          print("AndroidManifest.xml patched successfully.")
+          print("AndroidManifest.xml updated with full permissions and TTS configuration.")
           PYEOF
 
           find . -name "build.gradle.kts" -exec sed -i '/kotlin.*android/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Add Character Voice Separation & Fluent Studio Engine
+      - name: Add High-Tech UI, Permissions & Navigation Architecture
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -135,11 +144,13 @@ jobs:
           cat << 'EOF' > "$MAIN"
           package PACKAGE_NAME
 
+          import android.Manifest
           import android.app.Activity
           import android.app.AlertDialog
           import android.content.Context
           import android.content.Intent
           import android.content.pm.ActivityInfo
+          import android.content.pm.PackageManager
           import android.content.res.Configuration
           import android.graphics.Color
           import android.graphics.Typeface
@@ -167,7 +178,6 @@ jobs:
           import android.view.WindowManager
           import android.widget.Button
           import android.widget.FrameLayout
-          import android.widget.HorizontalScrollView
           import android.widget.LinearLayout
           import android.widget.ScrollView
           import android.widget.SeekBar
@@ -199,12 +209,26 @@ jobs:
 
           class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
+              private val PERMISSION_REQUEST_CODE = 2001
+
               private lateinit var rootFrame: FrameLayout
+              private lateinit var mainContentContainer: FrameLayout
+
+              // Home Tab Components
+              private lateinit var homeTabView: LinearLayout
               private lateinit var videoContainer: FrameLayout
               private lateinit var videoView: VideoView
-              private lateinit var mainScrollView: ScrollView
               private lateinit var centerStartBtn: Button
+              private lateinit var openVideoBtn: Button
+              private lateinit var homeSpeedBtn: Button
+              private lateinit var homeStatusBadge: TextView
+              private lateinit var speakerTagBadge: TextView
+              private lateinit var originalContentView: TextView
+              private lateinit var translatedContentView: TextView
+              private lateinit var translatedTitleView: TextView
+              private lateinit var fullscreenSubtitleView: TextView
 
+              // Modern On-Screen Player Controls
               private lateinit var playerControlsOverlay: FrameLayout
               private lateinit var touchOverlayView: View
               private lateinit var centerIndicatorBadge: TextView
@@ -212,8 +236,6 @@ jobs:
               private lateinit var topBarBackBtn: Button
               private lateinit var topBarTitleView: TextView
               private lateinit var bottomControlsBar: LinearLayout
-
-              private lateinit var centerControlsRow: LinearLayout
               private lateinit var onScreenRewBtn: Button
               private lateinit var onScreenPlayPauseBtn: Button
               private lateinit var onScreenFwdBtn: Button
@@ -221,18 +243,22 @@ jobs:
               private lateinit var onScreenTimeStatusView: TextView
               private lateinit var onScreenFullscreenBtn: Button
 
-              private lateinit var originalTitleView: TextView
-              private lateinit var originalContentView: TextView
-              private lateinit var translatedTitleView: TextView
-              private lateinit var translatedContentView: TextView
-              private lateinit var speakerTagBadge: TextView
-              private lateinit var statusBadge: TextView
-              private lateinit var fullscreenSubtitleView: TextView
+              // Settings Tab Components
+              private lateinit var settingsTabView: ScrollView
+              private lateinit var settingLangValView: TextView
+              private lateinit var settingVoiceValView: TextView
+              private lateinit var settingStyleValView: TextView
+              private lateinit var settingSpeedValView: TextView
+              private lateinit var settingCacheValView: TextView
 
-              private lateinit var langPillBtn: Button
-              private lateinit var voicePillBtn: Button
-              private lateinit var speedPillBtn: Button
-              private lateinit var stylePillBtn: Button
+              // Bottom Navigation Bar
+              private lateinit var bottomNavBar: LinearLayout
+              private lateinit var navHomeBtn: LinearLayout
+              private lateinit var navSettingsBtn: LinearLayout
+              private lateinit var navHomeIcon: TextView
+              private lateinit var navHomeLabel: TextView
+              private lateinit var navSettingsIcon: TextView
+              private lateinit var navSettingsLabel: TextView
 
               private var selectedVideoUri: Uri? = null
               private var tts: TextToSpeech? = null
@@ -244,6 +270,7 @@ jobs:
               private val seekTargetMs = AtomicLong(-1L)
               private var isFullscreen = false
               private var isUserTouchingSeekBar = false
+              private var activeTab = 0
 
               private var activeLockedModel: String? = null
               private val candidateModels = mutableListOf<String>()
@@ -262,7 +289,6 @@ jobs:
               private var dubStyleKey = "netflix"
               private var currentPlaybackSpeed = 1.0f
 
-              // Distinct Neural Voice Caching
               private var cachedMaleVoice: Voice? = null
               private var cachedFemaleVoice: Voice? = null
 
@@ -275,7 +301,6 @@ jobs:
               private var initialBrightness = 0.5f
               private var initialSeekPos = 0L
               private var targetGestureSeekPos = 0L
-
               private var systemStatusBarHeight = 0
 
               private val availableLanguages = arrayOf(
@@ -358,10 +383,99 @@ jobs:
                   currentPlaybackSpeed = prefs.getFloat("PLAY_SPEED", 1.0f)
 
                   rootFrame = FrameLayout(this).apply {
-                      setBackgroundColor(Color.parseColor("#0F1015"))
+                      setBackgroundColor(Color.parseColor("#090A0F"))
                   }
 
-                  val mainVerticalLayout = LinearLayout(this).apply {
+                  val outerLayout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.MATCH_PARENT
+                      )
+                  }
+
+                  mainContentContainer = FrameLayout(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          0,
+                          1f
+                      )
+                  }
+
+                  buildHomeTab()
+                  buildSettingsTab()
+                  mainContentContainer.addView(homeTabView)
+                  mainContentContainer.addView(settingsTabView)
+                  outerLayout.addView(mainContentContainer)
+
+                  buildBottomNavigationBar()
+                  outerLayout.addView(bottomNavBar)
+
+                  rootFrame.addView(outerLayout)
+                  setContentView(rootFrame)
+
+                  setupWindowInsetsAdapter()
+                  setupSeekBarListeners()
+                  setupVlcGestures()
+                  switchTab(0)
+
+                  checkAndRequestStoragePermissions()
+
+                  videoView.setOnPreparedListener { mp ->
+                      mediaPlayerRef = mp
+                      mp.setVolume(0f, 0f)
+                      applyVideoPlaybackSpeed()
+                      onScreenSeekBar.max = videoView.duration
+
+                      mp.setOnSeekCompleteListener {
+                          mediaPlayerRef?.setVolume(0f, 0f)
+                          applyVideoPlaybackSpeed()
+                          val curPos = videoView.currentPosition.toLong()
+                          handleSeekTo(curPos)
+                      }
+                  }
+
+                  startTimestampConsumerLoop()
+                  startSeekBarUpdater()
+              }
+
+              private fun checkAndRequestStoragePermissions() {
+                  val neededPermissions = mutableListOf<String>()
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                      if (checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED) {
+                          neededPermissions.add(Manifest.permission.READ_MEDIA_VIDEO)
+                      }
+                      if (checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                          neededPermissions.add(Manifest.permission.READ_MEDIA_AUDIO)
+                      }
+                  } else {
+                      if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                          neededPermissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                      }
+                  }
+
+                  if (neededPermissions.isNotEmpty()) {
+                      requestPermissions(neededPermissions.toTypedArray(), PERMISSION_REQUEST_CODE)
+                  }
+              }
+
+              override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+                  if (requestCode == PERMISSION_REQUEST_CODE) {
+                      val allGranted = grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+                      if (allGranted) {
+                          Toast.makeText(this, "✅ स्टोरेज परमिशन मिल गई", Toast.LENGTH_SHORT).show()
+                          homeStatusBadge.text = "Permission granted. Select a video."
+                      } else {
+                          Toast.makeText(this, "⚠️ वीडियो प्ले करने के लिए स्टोरेज परमिशन ज़रूरी है", Toast.LENGTH_LONG).show()
+                          homeStatusBadge.text = "Storage permission required"
+                      }
+                  }
+              }
+
+              private fun buildHomeTab() {
+                  homeTabView = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       layoutParams = FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
@@ -400,9 +514,9 @@ jobs:
 
                   fullscreenSubtitleView = TextView(this).apply {
                       textSize = 15f
-                      setTextColor(Color.parseColor("#FFD54F"))
+                      setTextColor(Color.parseColor("#00E5FF"))
                       setTypeface(null, Typeface.BOLD)
-                      background = createRoundedDrawable(Color.parseColor("#D9121212"), dpToPx(10).toFloat())
+                      background = createRoundedDrawable(Color.parseColor("#E6090A0F"), dpToPx(10).toFloat(), dpToPx(1), Color.parseColor("#00E5FF"))
                       gravity = Gravity.CENTER
                       setPadding(dpToPx(18), dpToPx(8), dpToPx(18), dpToPx(8))
                       visibility = View.GONE
@@ -442,109 +556,81 @@ jobs:
                       }
                   }
                   videoContainer.addView(centerStartBtn)
-                  mainVerticalLayout.addView(videoContainer)
+                  homeTabView.addView(videoContainer)
 
-                  mainScrollView = ScrollView(this).apply {
+                  val homeScrollView = ScrollView(this).apply {
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
                           0,
                           1f
                       )
                       isFillViewport = true
-                      setBackgroundColor(Color.parseColor("#F5F7FA"))
+                      setBackgroundColor(Color.parseColor("#090A0F"))
                   }
 
-                  val cardsContainer = LinearLayout(this).apply {
+                  val homeContent = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(20))
+                      setPadding(dpToPx(16), dpToPx(16), dpToPx(16), dpToPx(20))
                   }
 
-                  val modernHeaderRow = LinearLayout(this).apply {
+                  // High-Tech Quick Action Bar
+                  val quickActionBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
-                      val params = LinearLayout.LayoutParams(
+                      val p = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
                           LinearLayout.LayoutParams.WRAP_CONTENT
                       ).apply {
-                          bottomMargin = dpToPx(10)
+                          bottomMargin = dpToPx(14)
                       }
-                      layoutParams = params
+                      layoutParams = p
                   }
 
-                  val openVideoBtn = Button(this).apply {
-                      text = "📂 Open Video"
-                      textSize = 12f
+                  openVideoBtn = Button(this).apply {
+                      text = "📂 Select Video"
+                      textSize = 13f
                       setTypeface(null, Typeface.BOLD)
                       setTextColor(Color.WHITE)
-                      background = createRoundedDrawable(Color.parseColor("#263238"), dpToPx(10).toFloat())
-                      setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8))
-                      setOnClickListener { openVideoPicker() }
-                  }
-                  modernHeaderRow.addView(openVideoBtn)
-
-                  val spacerHeader = View(this).apply {
-                      layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
-                  }
-                  modernHeaderRow.addView(spacerHeader)
-
-                  speakerTagBadge = TextView(this).apply {
-                      text = "ROLE: NONE"
-                      textSize = 10f
-                      setTextColor(Color.WHITE)
-                      background = createRoundedDrawable(Color.parseColor("#607D8B"), dpToPx(6).toFloat())
-                      setPadding(dpToPx(10), dpToPx(4), dpToPx(10), dpToPx(4))
-                      visibility = View.GONE
-                  }
-                  modernHeaderRow.addView(speakerTagBadge)
-                  cardsContainer.addView(modernHeaderRow)
-
-                  val pillScroller = HorizontalScrollView(this).apply {
-                      isHorizontalScrollBarEnabled = false
-                      val params = LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      ).apply {
-                          bottomMargin = dpToPx(12)
+                      background = createRoundedDrawable(Color.parseColor("#FF5722"), dpToPx(12).toFloat())
+                      val p = LinearLayout.LayoutParams(0, dpToPx(44), 1.25f).apply {
+                          marginEnd = dpToPx(10)
                       }
-                      layoutParams = params
+                      layoutParams = p
+                      setOnClickListener {
+                          checkAndRequestStoragePermissions()
+                          openVideoPicker()
+                      }
                   }
+                  quickActionBar.addView(openVideoBtn)
 
-                  val pillRow = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
+                  homeSpeedBtn = Button(this).apply {
+                      text = "⚡ ${currentPlaybackSpeed}x"
+                      textSize = 13f
+                      setTypeface(null, Typeface.BOLD)
+                      setTextColor(Color.parseColor("#00E5FF"))
+                      background = createCardDrawable(Color.parseColor("#12151F"), Color.parseColor("#22283A"), dpToPx(12).toFloat(), dpToPx(1))
+                      val p = LinearLayout.LayoutParams(0, dpToPx(44), 0.75f)
+                      layoutParams = p
+                      setOnClickListener { cycleSpeedToggle() }
                   }
+                  quickActionBar.addView(homeSpeedBtn)
+                  homeContent.addView(quickActionBar)
 
-                  langPillBtn = createModernPill("🌐 $targetLangName ▼") { showLanguageSelector() }
-                  pillRow.addView(langPillBtn)
-
-                  voicePillBtn = createModernPill(if (voiceTypeIndex == 0) "🎭 Auto Voice ▼" else voiceNames[voiceTypeIndex].split(" ")[1] + " ▼") { showVoiceSelector() }
-                  pillRow.addView(voicePillBtn)
-
-                  speedPillBtn = createModernPill("⚡ ${currentPlaybackSpeed}x ▼") { showSpeedSelector() }
-                  pillRow.addView(speedPillBtn)
-
-                  stylePillBtn = createModernPill(if (dubStyleKey == "netflix") "🎬 नेटफ्लिक्स ▼" else if (dubStyleKey == "hinglish") "🍿 हिंग्लिश ▼" else "📖 फॉर्मल ▼") { showStyleSelector() }
-                  pillRow.addView(stylePillBtn)
-
-                  val settingsPill = createModernPill("⚙️ Settings") { showSettingsDialog() }
-                  pillRow.addView(settingsPill)
-
-                  pillScroller.addView(pillRow)
-                  cardsContainer.addView(pillScroller)
-
+                  // Status and Speaker Badge
                   val statusRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
-                      val params = LinearLayout.LayoutParams(
+                      val p = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
                           LinearLayout.LayoutParams.WRAP_CONTENT
                       ).apply {
-                          bottomMargin = dpToPx(12)
+                          bottomMargin = dpToPx(14)
                       }
-                      layoutParams = params
+                      layoutParams = p
                   }
 
                   val liveDot = View(this).apply {
-                      background = createRoundedDrawable(Color.parseColor("#4CAF50"), dpToPx(8).toFloat())
+                      background = createRoundedDrawable(Color.parseColor("#00E676"), dpToPx(8).toFloat())
                       val p = LinearLayout.LayoutParams(dpToPx(8), dpToPx(8)).apply {
                           marginEnd = dpToPx(8)
                       }
@@ -552,18 +638,30 @@ jobs:
                   }
                   statusRow.addView(liveDot)
 
-                  statusBadge = TextView(this).apply {
-                      text = "Select a video to begin live dubbing"
+                  homeStatusBadge = TextView(this).apply {
+                      text = "Tap 'Select Video' to open file"
                       textSize = 12f
-                      setTextColor(Color.parseColor("#546E7A"))
+                      setTextColor(Color.parseColor("#78909C"))
                       setTypeface(null, Typeface.BOLD)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                   }
-                  statusRow.addView(statusBadge)
-                  cardsContainer.addView(statusRow)
+                  statusRow.addView(homeStatusBadge)
 
-                  val originalCard = LinearLayout(this).apply {
+                  speakerTagBadge = TextView(this).apply {
+                      text = "ROLE: NONE"
+                      textSize = 10f
+                      setTextColor(Color.parseColor("#00E5FF"))
+                      background = createRoundedDrawable(Color.parseColor("#15222E"), dpToPx(6).toFloat(), dpToPx(1), Color.parseColor("#00E5FF"))
+                      setPadding(dpToPx(10), dpToPx(4), dpToPx(10), dpToPx(4))
+                      visibility = View.GONE
+                  }
+                  statusRow.addView(speakerTagBadge)
+                  homeContent.addView(statusRow)
+
+                  // High-Tech Cyber Cards for Subtitles
+                  val translatedCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      background = createCardDrawable(Color.WHITE, Color.parseColor("#E0E4E8"), dpToPx(14).toFloat(), dpToPx(1))
+                      background = createCardDrawable(Color.parseColor("#12151F"), Color.parseColor("#252E42"), dpToPx(14).toFloat(), dpToPx(1))
                       setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(16))
                       val params = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
@@ -574,44 +672,10 @@ jobs:
                       layoutParams = params
                   }
 
-                  originalTitleView = TextView(this).apply {
-                      text = "ORIGINAL DIALOGUE"
-                      textSize = 11f
-                      setTextColor(Color.parseColor("#78909C"))
-                      setTypeface(null, Typeface.BOLD)
-                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(6)
-                      }
-                      layoutParams = p
-                  }
-                  originalCard.addView(originalTitleView)
-
-                  originalContentView = TextView(this).apply {
-                      text = "Tap on 'Open Video' to load recognized dialogue subtitles."
-                      textSize = 14f
-                      setTextColor(Color.parseColor("#37474F"))
-                      setLineSpacing(4f, 1.15f)
-                  }
-                  originalCard.addView(originalContentView)
-                  cardsContainer.addView(originalCard)
-
-                  val translatedCard = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      background = createCardDrawable(Color.parseColor("#FFF9F0"), Color.parseColor("#FFE0B2"), dpToPx(14).toFloat(), dpToPx(1))
-                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(16))
-                      val params = LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      ).apply {
-                          bottomMargin = dpToPx(16)
-                      }
-                      layoutParams = params
-                  }
-
                   translatedTitleView = TextView(this).apply {
                       text = "CINEMATIC DUBBING ($targetLangName)"
                       textSize = 11f
-                      setTextColor(Color.parseColor("#F57C00"))
+                      setTextColor(Color.parseColor("#FF9100"))
                       setTypeface(null, Typeface.BOLD)
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                           bottomMargin = dpToPx(6)
@@ -621,41 +685,293 @@ jobs:
                   translatedCard.addView(translatedTitleView)
 
                   translatedContentView = TextView(this).apply {
-                      text = "Expressive, character-accurate Hindi audio will stream here."
-                      textSize = 16f
-                      setTextColor(Color.parseColor("#BF360C"))
+                      text = "AI dubbed dialogue stream will display here in real time."
+                      textSize = 15f
+                      setTextColor(Color.parseColor("#ECEFF1"))
                       setTypeface(null, Typeface.BOLD)
                       setLineSpacing(4f, 1.25f)
                   }
                   translatedCard.addView(translatedContentView)
-                  cardsContainer.addView(translatedCard)
+                  homeContent.addView(translatedCard)
 
-                  mainScrollView.addView(cardsContainer)
-                  mainVerticalLayout.addView(mainScrollView)
-                  rootFrame.addView(mainVerticalLayout)
+                  val originalCard = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      background = createCardDrawable(Color.parseColor("#0E1118"), Color.parseColor("#1C2230"), dpToPx(14).toFloat(), dpToPx(1))
+                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(16))
+                      val params = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                      layoutParams = params
+                  }
 
-                  setContentView(rootFrame)
+                  val origHeader = TextView(this).apply {
+                      text = "ORIGINAL DIALOGUE"
+                      textSize = 11f
+                      setTextColor(Color.parseColor("#546E7A"))
+                      setTypeface(null, Typeface.BOLD)
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          bottomMargin = dpToPx(6)
+                      }
+                      layoutParams = p
+                  }
+                  originalCard.addView(origHeader)
 
-                  setupWindowInsetsAdapter()
-                  setupSeekBarListeners()
-                  setupVlcGestures()
+                  originalContentView = TextView(this).apply {
+                      text = "Recognized original dialogue subtitles appear here."
+                      textSize = 13f
+                      setTextColor(Color.parseColor("#90A4AE"))
+                      setLineSpacing(4f, 1.15f)
+                  }
+                  originalCard.addView(originalContentView)
+                  homeContent.addView(originalCard)
 
-                  videoView.setOnPreparedListener { mp ->
-                      mediaPlayerRef = mp
-                      mp.setVolume(0f, 0f)
-                      applyVideoPlaybackSpeed()
-                      onScreenSeekBar.max = videoView.duration
+                  homeScrollView.addView(homeContent)
+                  homeTabView.addView(homeScrollView)
+              }
 
-                      mp.setOnSeekCompleteListener {
-                          mediaPlayerRef?.setVolume(0f, 0f)
-                          applyVideoPlaybackSpeed()
-                          val curPos = videoView.currentPosition.toLong()
-                          handleSeekTo(curPos)
+              private fun buildSettingsTab() {
+                  settingsTabView = ScrollView(this).apply {
+                      layoutParams = FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.MATCH_PARENT
+                      )
+                      isFillViewport = true
+                      setBackgroundColor(Color.parseColor("#090A0F"))
+                      visibility = View.GONE
+                  }
+
+                  val settingsContainer = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dpToPx(18), dpToPx(20), dpToPx(18), dpToPx(24))
+                  }
+
+                  val headerTitle = TextView(this).apply {
+                      text = "⚙️ Settings & Engine Options"
+                      textSize = 18f
+                      setTextColor(Color.WHITE)
+                      setTypeface(null, Typeface.BOLD)
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          bottomMargin = dpToPx(18)
+                      }
+                      layoutParams = p
+                  }
+                  settingsContainer.addView(headerTitle)
+
+                  settingLangValView = TextView(this)
+                  settingsContainer.addView(createSettingsRow("🌐 Target Language", targetLangName, settingLangValView) {
+                      showLanguageSelector()
+                  })
+
+                  settingVoiceValView = TextView(this)
+                  settingsContainer.addView(createSettingsRow("🎭 Voice Character", voiceNames[voiceTypeIndex], settingVoiceValView) {
+                      showVoiceSelector()
+                  })
+
+                  settingStyleValView = TextView(this)
+                  val styleCurrentName = when (dubStyleKey) {
+                      "netflix" -> "🎬 नेटफ्लिक्स / सिनेमाई"
+                      "hinglish" -> "🍿 कैजुअल हिंग्लिश"
+                      else -> "📖 फॉर्मल हिंदी"
+                  }
+                  settingsContainer.addView(createSettingsRow("🎬 Dubbing Style", styleCurrentName, settingStyleValView) {
+                      showStyleSelector()
+                  })
+
+                  settingSpeedValView = TextView(this)
+                  settingsContainer.addView(createSettingsRow("⚡ Playback Speed", "${currentPlaybackSpeed}x", settingSpeedValView) {
+                      showSpeedSelector()
+                  })
+
+                  settingCacheValView = TextView(this)
+                  settingsContainer.addView(createSettingsRow("🧹 Clear Session Cache", "${sessionCacheMap.size} Dialogues", settingCacheValView) {
+                      timelineDubQueue.clear()
+                      sessionCacheMap.clear()
+                      recentSpokenTexts.clear()
+                      updateSettingsValues()
+                      Toast.makeText(this, "Session cache cleared", Toast.LENGTH_SHORT).show()
+                  })
+
+                  val stopBtnCard = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER
+                      background = createCardDrawable(Color.parseColor("#261114"), Color.parseColor("#B71C1C"), dpToPx(12).toFloat(), dpToPx(1))
+                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(14))
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          topMargin = dpToPx(12)
+                      }
+                      layoutParams = p
+                      setOnClickListener {
+                          isProcessing.set(false)
+                          tts?.stop()
+                          isSpeechActive.set(false)
+                          fullscreenSubtitleView.text = ""
+                          timelineDubQueue.clear()
+                          videoView.pause()
+                          saveCurrentPosition()
+                          homeStatusBadge.text = "Dubbing Stopped"
+                          centerStartBtn.visibility = View.VISIBLE
+                          Toast.makeText(this@MainActivity, "Dubbing Stopped", Toast.LENGTH_SHORT).show()
+                          switchTab(0)
                       }
                   }
 
-                  startTimestampConsumerLoop()
-                  startSeekBarUpdater()
+                  val stopText = TextView(this).apply {
+                      text = "🛑 Stop Live Dubbing Process"
+                      textSize = 14f
+                      setTextColor(Color.parseColor("#FF5252"))
+                      setTypeface(null, Typeface.BOLD)
+                  }
+                  stopBtnCard.addView(stopText)
+                  settingsContainer.addView(stopBtnCard)
+
+                  settingsTabView.addView(settingsContainer)
+              }
+
+              private fun createSettingsRow(title: String, initialVal: String, valView: TextView, onClick: () -> Unit): LinearLayout {
+                  val card = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      background = createCardDrawable(Color.parseColor("#12151F"), Color.parseColor("#22283A"), dpToPx(12).toFloat(), dpToPx(1))
+                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(14))
+                      val p = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      ).apply {
+                          bottomMargin = dpToPx(10)
+                      }
+                      layoutParams = p
+                      setOnClickListener { onClick() }
+                  }
+
+                  val titleView = TextView(this).apply {
+                      text = title
+                      textSize = 14f
+                      setTextColor(Color.parseColor("#CFD8DC"))
+                      setTypeface(null, Typeface.BOLD)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+                  card.addView(titleView)
+
+                  valView.apply {
+                      text = initialVal
+                      textSize = 12f
+                      setTextColor(Color.parseColor("#00E5FF"))
+                      setTypeface(null, Typeface.BOLD)
+                  }
+                  card.addView(valView)
+
+                  val arrow = TextView(this).apply {
+                      text = "  ›"
+                      textSize = 18f
+                      setTextColor(Color.parseColor("#546E7A"))
+                  }
+                  card.addView(arrow)
+                  return card
+              }
+
+              private fun updateSettingsValues() {
+                  settingLangValView.text = targetLangName
+                  settingVoiceValView.text = voiceNames[voiceTypeIndex]
+                  settingStyleValView.text = when (dubStyleKey) {
+                      "netflix" -> "🎬 नेटफ्लिक्स / सिनेमाई"
+                      "hinglish" -> "🍿 कैजुअल हिंग्लिश"
+                      else -> "📖 फॉर्मल हिंदी"
+                  }
+                  settingSpeedValView.text = "${currentPlaybackSpeed}x"
+                  settingCacheValView.text = "${sessionCacheMap.size} Dialogues"
+                  homeSpeedBtn.text = "⚡ ${currentPlaybackSpeed}x"
+                  translatedTitleView.text = "CINEMATIC DUBBING ($targetLangName)"
+              }
+
+              private fun buildBottomNavigationBar() {
+                  bottomNavBar = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setBackgroundColor(Color.parseColor("#0C0E14"))
+                      setPadding(0, dpToPx(6), 0, dpToPx(6))
+                      val p = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          dpToPx(56)
+                      )
+                      layoutParams = p
+                  }
+
+                  navHomeBtn = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+                      setOnClickListener { switchTab(0) }
+                  }
+
+                  navHomeIcon = TextView(this).apply {
+                      text = "🏠"
+                      textSize = 18f
+                  }
+                  navHomeBtn.addView(navHomeIcon)
+
+                  navHomeLabel = TextView(this).apply {
+                      text = "Home"
+                      textSize = 11f
+                      setTypeface(null, Typeface.BOLD)
+                  }
+                  navHomeBtn.addView(navHomeLabel)
+                  bottomNavBar.addView(navHomeBtn)
+
+                  navSettingsBtn = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+                      setOnClickListener { switchTab(1) }
+                  }
+
+                  navSettingsIcon = TextView(this).apply {
+                      text = "⚙️"
+                      textSize = 18f
+                  }
+                  navSettingsBtn.addView(navSettingsIcon)
+
+                  navSettingsLabel = TextView(this).apply {
+                      text = "Settings"
+                      textSize = 11f
+                      setTypeface(null, Typeface.BOLD)
+                  }
+                  navSettingsBtn.addView(navSettingsLabel)
+                  bottomNavBar.addView(navSettingsBtn)
+              }
+
+              private fun switchTab(tabIndex: Int) {
+                  activeTab = tabIndex
+                  if (tabIndex == 0) {
+                      homeTabView.visibility = View.VISIBLE
+                      settingsTabView.visibility = View.GONE
+                      navHomeLabel.setTextColor(Color.parseColor("#FF5722"))
+                      navSettingsLabel.setTextColor(Color.parseColor("#546E7A"))
+                  } else {
+                      homeTabView.visibility = View.GONE
+                      settingsTabView.visibility = View.VISIBLE
+                      updateSettingsValues()
+                      navHomeLabel.setTextColor(Color.parseColor("#546E7A"))
+                      navSettingsLabel.setTextColor(Color.parseColor("#FF5722"))
+                  }
+              }
+
+              private fun cycleSpeedToggle() {
+                  val speeds = floatArrayOf(1.0f, 1.25f, 1.5f, 2.0f)
+                  var nextIdx = 0
+                  for (i in speeds.indices) {
+                      if (currentPlaybackSpeed == speeds[i]) {
+                          nextIdx = (i + 1) % speeds.size
+                          break
+                      }
+                  }
+                  currentPlaybackSpeed = speeds[nextIdx]
+                  homeSpeedBtn.text = "⚡ ${currentPlaybackSpeed}x"
+                  getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
+                      .putFloat("PLAY_SPEED", currentPlaybackSpeed)
+                      .apply()
+
+                  applyVideoPlaybackSpeed()
+                  Toast.makeText(this, "Speed: ${currentPlaybackSpeed}x", Toast.LENGTH_SHORT).show()
               }
 
               private fun setupWindowInsetsAdapter() {
@@ -688,7 +1004,7 @@ jobs:
                           FrameLayout.LayoutParams.MATCH_PARENT,
                           FrameLayout.LayoutParams.MATCH_PARENT
                       )
-                      setBackgroundColor(Color.parseColor("#55000000"))
+                      setBackgroundColor(Color.parseColor("#66000000"))
                       visibility = View.GONE
                   }
 
@@ -696,7 +1012,7 @@ jobs:
                       textSize = 15f
                       setTextColor(Color.WHITE)
                       setTypeface(null, Typeface.BOLD)
-                      background = createRoundedDrawable(Color.parseColor("#E6181818"), dpToPx(12).toFloat())
+                      background = createRoundedDrawable(Color.parseColor("#E6090A0F"), dpToPx(12).toFloat(), dpToPx(1), Color.parseColor("#00E5FF"))
                       gravity = Gravity.CENTER
                       setPadding(dpToPx(20), dpToPx(10), dpToPx(20), dpToPx(10))
                       visibility = View.GONE
@@ -712,7 +1028,7 @@ jobs:
                   topBarOverlay = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
-                      setBackgroundColor(Color.parseColor("#80000000"))
+                      setBackgroundColor(Color.parseColor("#99090A0F"))
                       setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6))
                       val params = FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
@@ -726,7 +1042,7 @@ jobs:
                       text = "← Back"
                       textSize = 12f
                       setTextColor(Color.WHITE)
-                      background = createRoundedDrawable(Color.parseColor("#37474F"), dpToPx(6).toFloat())
+                      background = createRoundedDrawable(Color.parseColor("#22283A"), dpToPx(6).toFloat())
                       setPadding(dpToPx(12), dpToPx(2), dpToPx(12), dpToPx(2))
                       visibility = View.GONE
                       setOnClickListener {
@@ -736,7 +1052,7 @@ jobs:
                   topBarOverlay.addView(topBarBackBtn)
 
                   topBarTitleView = TextView(this).apply {
-                      text = "  HindiDub Player (Dual Voice HD)"
+                      text = "  HindiDub Player"
                       textSize = 13f
                       setTextColor(Color.WHITE)
                       setTypeface(null, Typeface.BOLD)
@@ -760,7 +1076,7 @@ jobs:
                       textSize = 13f
                       setTextColor(Color.WHITE)
                       setTypeface(null, Typeface.BOLD)
-                      background = createRoundedDrawable(Color.parseColor("#66FFFFFF"), dpToPx(25).toFloat())
+                      background = createRoundedDrawable(Color.parseColor("#33FFFFFF"), dpToPx(25).toFloat(), dpToPx(1), Color.parseColor("#66FFFFFF"))
                       val params = LinearLayout.LayoutParams(dpToPx(50), dpToPx(50)).apply {
                           marginEnd = dpToPx(20)
                       }
@@ -794,7 +1110,7 @@ jobs:
                       textSize = 13f
                       setTextColor(Color.WHITE)
                       setTypeface(null, Typeface.BOLD)
-                      background = createRoundedDrawable(Color.parseColor("#66FFFFFF"), dpToPx(25).toFloat())
+                      background = createRoundedDrawable(Color.parseColor("#33FFFFFF"), dpToPx(25).toFloat(), dpToPx(1), Color.parseColor("#66FFFFFF"))
                       val params = LinearLayout.LayoutParams(dpToPx(50), dpToPx(50)).apply {
                           marginStart = dpToPx(20)
                       }
@@ -813,7 +1129,7 @@ jobs:
                   bottomControlsBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
-                      setBackgroundColor(Color.parseColor("#99000000"))
+                      setBackgroundColor(Color.parseColor("#B3090A0F"))
                       setPadding(dpToPx(14), dpToPx(4), dpToPx(12), dpToPx(6))
                       val params = FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
@@ -1007,7 +1323,7 @@ jobs:
                       tts?.stop()
                       isSpeechActive.set(false)
                       saveCurrentPosition()
-                      statusBadge.text = "Paused"
+                      homeStatusBadge.text = "Paused"
                       onScreenPlayPauseBtn.text = "▶"
                       showCenterIndicator("⏸ Paused")
                       uiHandler.removeCallbacks(hideControlsRunnable)
@@ -1015,7 +1331,7 @@ jobs:
                       mediaPlayerRef?.setVolume(0f, 0f)
                       applyVideoPlaybackSpeed()
                       videoView.start()
-                      statusBadge.text = "Playing ($targetLangName)"
+                      homeStatusBadge.text = "Playing ($targetLangName)"
                       onScreenPlayPauseBtn.text = "⏸"
                       showCenterIndicator("▶ Playing")
                       touchResetOverlayTimer()
@@ -1038,7 +1354,8 @@ jobs:
                   }
 
                   rootFrame.setPadding(0, 0, 0, 0)
-                  mainScrollView.visibility = View.GONE
+                  bottomNavBar.visibility = View.GONE
+
                   videoContainer.layoutParams = LinearLayout.LayoutParams(
                       LinearLayout.LayoutParams.MATCH_PARENT,
                       LinearLayout.LayoutParams.MATCH_PARENT
@@ -1058,7 +1375,7 @@ jobs:
                   window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
 
                   rootFrame.setPadding(0, systemStatusBarHeight, 0, 0)
-                  mainScrollView.visibility = View.VISIBLE
+                  bottomNavBar.visibility = View.VISIBLE
 
                   val displayMetrics = resources.displayMetrics
                   val screenWidth = displayMetrics.widthPixels
@@ -1083,6 +1400,8 @@ jobs:
               override fun onBackPressed() {
                   if (isFullscreen) {
                       exitFullscreen()
+                  } else if (activeTab == 1) {
+                      switchTab(0)
                   } else {
                       super.onBackPressed()
                   }
@@ -1101,11 +1420,14 @@ jobs:
                   return (dp * resources.displayMetrics.density).toInt()
               }
 
-              private fun createRoundedDrawable(bgColor: Int, cornerRadius: Float): GradientDrawable {
+              private fun createRoundedDrawable(bgColor: Int, cornerRadius: Float, strokeWidth: Int = 0, strokeColor: Int = Color.TRANSPARENT): GradientDrawable {
                   return GradientDrawable().apply {
                       shape = GradientDrawable.RECTANGLE
                       setColor(bgColor)
                       this.cornerRadius = cornerRadius
+                      if (strokeWidth > 0) {
+                          setStroke(strokeWidth, strokeColor)
+                      }
                   }
               }
 
@@ -1115,25 +1437,6 @@ jobs:
                       setColor(bgColor)
                       this.cornerRadius = cornerRadius
                       setStroke(strokeWidth, strokeColor)
-                  }
-              }
-
-              private fun createModernPill(title: String, onClick: () -> Unit): Button {
-                  return Button(this).apply {
-                      text = title
-                      textSize = 11f
-                      setTextColor(Color.parseColor("#37474F"))
-                      setTypeface(null, Typeface.BOLD)
-                      background = createCardDrawable(Color.WHITE, Color.parseColor("#CFD8DC"), dpToPx(16).toFloat(), dpToPx(1))
-                      val params = LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.WRAP_CONTENT,
-                          dpToPx(36)
-                      ).apply {
-                          marginEnd = dpToPx(8)
-                      }
-                      layoutParams = params
-                      setPadding(dpToPx(14), 0, dpToPx(14), 0)
-                      setOnClickListener { onClick() }
                   }
               }
 
@@ -1195,10 +1498,10 @@ jobs:
                       applyVideoPlaybackSpeed()
                       videoView.start()
                       onScreenPlayPauseBtn.text = "⏸"
-                      statusBadge.text = "⚡ Instant Cache Playback (${currentPlaybackSpeed}x)"
+                      homeStatusBadge.text = "⚡ Instant Cache Playback (${currentPlaybackSpeed}x)"
                   } else {
                       videoView.pause()
-                      statusBadge.text = "⏳ Syncing Dubbing at ${formatTime(targetPosMs)}..."
+                      homeStatusBadge.text = "⏳ Syncing Dubbing at ${formatTime(targetPosMs)}..."
                   }
               }
 
@@ -1249,13 +1552,12 @@ jobs:
                       .setTitle("Choose Speed (गति)")
                       .setItems(labels) { _, idx ->
                           currentPlaybackSpeed = speedOptions[idx].second
-                          speedPillBtn.text = "⚡ ${currentPlaybackSpeed}x ▼"
-
                           getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
                               .putFloat("PLAY_SPEED", currentPlaybackSpeed)
                               .apply()
 
                           applyVideoPlaybackSpeed()
+                          updateSettingsValues()
                           Toast.makeText(this, "Speed: ${currentPlaybackSpeed}x", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
@@ -1270,8 +1572,6 @@ jobs:
                           val chosen = availableLanguages[which].second
                           targetLangCode = chosen.first
                           targetLangName = chosen.second
-                          langPillBtn.text = "🌐 $targetLangName ▼"
-                          translatedTitleView.text = "CINEMATIC DUBBING ($targetLangName)"
 
                           getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
                               .putString("LANG_CODE", targetLangCode)
@@ -1283,6 +1583,7 @@ jobs:
                           timelineDubQueue.clear()
                           sessionCacheMap.clear()
                           recentSpokenTexts.clear()
+                          updateSettingsValues()
                           Toast.makeText(this, "Language: $targetLangName", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
@@ -1294,12 +1595,12 @@ jobs:
                       .setTitle("Choose Voice Mode")
                       .setItems(voiceNames) { _, which ->
                           voiceTypeIndex = which
-                          voicePillBtn.text = if (which == 0) "🎭 Auto ▼" else voiceNames[voiceTypeIndex].split(" ")[1] + " ▼"
 
                           getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
                               .putInt("VOICE_INDEX", voiceTypeIndex)
                               .apply()
 
+                          updateSettingsValues()
                           Toast.makeText(this, "Voice: ${voiceNames[which]}", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
@@ -1315,11 +1616,6 @@ jobs:
                               1 -> "hinglish"
                               else -> "formal"
                           }
-                          stylePillBtn.text = when (dubStyleKey) {
-                              "netflix" -> "🎬 नेटफ्लिक्स ▼"
-                              "hinglish" -> "🍿 हिंग्लिश ▼"
-                              else -> "📖 फॉर्मल ▼"
-                          }
 
                           getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
                               .putString("DUB_STYLE", dubStyleKey)
@@ -1328,6 +1624,7 @@ jobs:
                           timelineDubQueue.clear()
                           sessionCacheMap.clear()
                           recentSpokenTexts.clear()
+                          updateSettingsValues()
                           Toast.makeText(this, "Style: ${styleNames[which]}", Toast.LENGTH_SHORT).show()
                       }
                       .setNegativeButton("Cancel", null)
@@ -1342,7 +1639,6 @@ jobs:
                   }
               }
 
-              // Separate Male & Female Google Studio Voices
               private fun resolveStudioVoices() {
                   try {
                       val voices = tts?.voices ?: emptySet()
@@ -1384,7 +1680,6 @@ jobs:
                   }
               }
 
-              // Switch Voice strictly by Character (No Pitch Distortion)
               private fun applyCharacterVoice(speakerType: String) {
                   try {
                       val effectiveRole = if (voiceTypeIndex == 0) {
@@ -1407,9 +1702,7 @@ jobs:
                           if (cachedMaleVoice != null) tts?.voice = cachedMaleVoice
                       }
 
-                      // Pitch strictly kept 1.0f for pure studio clarity
                       tts?.setPitch(1.0f)
-                      // 1.08x fluent, continuous speaking speed
                       tts?.setSpeechRate(1.08f * currentPlaybackSpeed)
 
                   } catch (e: Exception) {
@@ -1457,42 +1750,6 @@ jobs:
                   }
               }
 
-              private fun showSettingsDialog() {
-                  val activeCount = sessionCacheMap.size
-                  val options = arrayOf(
-                      "Target: $targetLangName ($targetLangCode)",
-                      "Voice: ${voiceNames[voiceTypeIndex]}",
-                      "Style: ${if (dubStyleKey == "netflix") "Cinematic Netflix Dub" else if (dubStyleKey == "hinglish") "Modern Hinglish" else "Formal Hindi"}",
-                      "Speed: ${currentPlaybackSpeed}x",
-                      "Cached Dialogues: $activeCount",
-                      "Stop Dubbing"
-                  )
-                  AlertDialog.Builder(this)
-                      .setTitle("⚙️ DubPlayer Settings")
-                      .setItems(options) { _, which ->
-                          when (which) {
-                              0 -> showLanguageSelector()
-                              1 -> showVoiceSelector()
-                              2 -> showStyleSelector()
-                              3 -> showSpeedSelector()
-                              4 -> Toast.makeText(this, "$activeCount active dialogues in session memory", Toast.LENGTH_SHORT).show()
-                              5 -> {
-                                  isProcessing.set(false)
-                                  tts?.stop()
-                                  isSpeechActive.set(false)
-                                  fullscreenSubtitleView.text = ""
-                                  timelineDubQueue.clear()
-                                  videoView.pause()
-                                  saveCurrentPosition()
-                                  statusBadge.text = "Dubbing Stopped"
-                                  centerStartBtn.visibility = View.VISIBLE
-                              }
-                          }
-                      }
-                      .setNegativeButton("Close", null)
-                      .show()
-              }
-
               override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
                   super.onActivityResult(requestCode, resultCode, data)
 
@@ -1525,13 +1782,13 @@ jobs:
                               .setMessage("Previous playback stopped at ${formatTime(savedPos.toLong())}. Resume from here?")
                               .setPositiveButton("Resume") { _, _ ->
                                   videoView.seekTo(savedPos)
-                                  statusBadge.text = "Resumed at ${formatTime(savedPos.toLong())}"
+                                  homeStatusBadge.text = "Resumed at ${formatTime(savedPos.toLong())}"
                                   centerStartBtn.visibility = View.VISIBLE
                                   showOverlayControls()
                               }
                               .setNegativeButton("Start from beginning") { _, _ ->
                                   videoView.seekTo(1)
-                                  statusBadge.text = "Video loaded"
+                                  homeStatusBadge.text = "Video loaded"
                                   centerStartBtn.visibility = View.VISIBLE
                                   showOverlayControls()
                               }
@@ -1539,7 +1796,7 @@ jobs:
                               .show()
                       } else {
                           videoView.seekTo(1)
-                          statusBadge.text = "Ready to start live dubbing"
+                          homeStatusBadge.text = "Ready to start live dubbing"
                           centerStartBtn.visibility = View.VISIBLE
                           showOverlayControls()
                       }
@@ -1553,7 +1810,7 @@ jobs:
                   timelineDubQueue.clear()
                   recentSpokenTexts.clear()
                   currentlyPlayingSegment = null
-                  statusBadge.text = "Pre-buffering live dialogue session..."
+                  homeStatusBadge.text = "Pre-buffering live dialogue session..."
 
                   Thread {
                       runLookAheadProducer(uri)
@@ -1592,7 +1849,7 @@ jobs:
 
                                                   speakerTagBadge.visibility = View.VISIBLE
                                                   speakerTagBadge.text = "SPEAKER: ${segment.speakerType.uppercase()}"
-                                                  statusBadge.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
+                                                  homeStatusBadge.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
 
                                                   recentSpokenTexts.add(normText to now)
                                                   while (recentSpokenTexts.size > 8) recentSpokenTexts.poll()
@@ -1782,7 +2039,7 @@ jobs:
                   }
 
                   if (audioTrackIndex < 0 || audioFormat == null) {
-                      runOnUiThread { statusBadge.text = "No audio track found in video!" }
+                      runOnUiThread { homeStatusBadge.text = "No audio track found in video!" }
                       return
                   }
 
@@ -1832,7 +2089,7 @@ jobs:
                                       applyVideoPlaybackSpeed()
                                       videoView.start()
                                       onScreenPlayPauseBtn.text = "⏸"
-                                      statusBadge.text = "⚡ Instant Cache Loaded ($targetLangName)"
+                                      homeStatusBadge.text = "⚡ Instant Cache Loaded ($targetLangName)"
                                   }
                               }
                               continue
@@ -1889,7 +2146,7 @@ jobs:
                                           applyVideoPlaybackSpeed()
                                           videoView.start()
                                           onScreenPlayPauseBtn.text = "⏸"
-                                          statusBadge.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
+                                          homeStatusBadge.text = "Dubbing Active ($targetLangName) [${currentPlaybackSpeed}x]"
                                       }
                                   }
                               } else {
@@ -1899,7 +2156,7 @@ jobs:
                                           applyVideoPlaybackSpeed()
                                           videoView.start()
                                           onScreenPlayPauseBtn.text = "⏸"
-                                          statusBadge.text = "Playing (Music/Silence)"
+                                          homeStatusBadge.text = "Playing (Music/Silence)"
                                       }
                                   }
                               }
@@ -1992,7 +2249,6 @@ jobs:
                   return segmentsList
               }
 
-              // Netflix Cinematic Dub Director with Strict Character Gender Tagging
               private fun buildMasterSystemPrompt(targetLang: String, style: String): String {
                   return """
                   You are a master Netflix / Crunchyroll Hindi Anime Dubbing Director.
@@ -2176,7 +2432,6 @@ jobs:
                   return true
               }
 
-              // Fluent Text Cleaner: Eliminates robotic mid-sentence pauses
               private fun cleanTextForDubbing(text: String, langCode: String): String {
                   var res = text.trim()
 
@@ -2189,7 +2444,6 @@ jobs:
                   res = res.replace(Regex("(?i)\\b(ok|okay)\\b"), "ओके")
                   res = res.replace(Regex("(?i)\\b(sir)\\b"), "सर")
 
-                  // Remove awkward pauses and replace with clean continuity
                   res = res.replace("...", " ")
                   res = res.replace("..", " ")
                   res = res.replace(".", "। ")
@@ -2246,7 +2500,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully upgraded to Character Studio Dual-Voice Engine"
+          echo "MainActivity successfully rewritten with Storage Permissions and High-Tech 2-Tab Architecture."
 
       - name: Build Debug APK
         run: |
@@ -2261,5 +2515,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-DualVoiceStudio-apk
+          name: HindiDubPlayer-CyberUI-Permissions-apk
           path: "**/build/outputs/apk/debug/*.apk"

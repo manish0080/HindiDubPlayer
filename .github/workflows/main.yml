@@ -35,37 +35,55 @@ jobs:
             unzip -q "$ZIP_FILE"
           fi
 
-      - name: Add App Icon
+            - name: Add App Icon
         run: |
-          echo "Adding Hindi Dub Player app icon..."
+          echo "Installing Hindi Dub Player launcher icon..."
 
           RES=$(find . -type d -path '*/src/main/res' | head -1)
           MANIFEST=$(find . -name "AndroidManifest.xml" | head -1)
 
           if [ -z "$RES" ]; then
-            echo "res folder not found"
+            echo "ERROR: res folder not found"
             exit 1
           fi
 
           if [ -z "$MANIFEST" ]; then
-            echo "AndroidManifest.xml not found"
+            echo "ERROR: AndroidManifest.xml not found"
             exit 1
           fi
-
-          mkdir -p "$RES/drawable"
 
           if [ ! -f "icon.png" ]; then
-            echo "icon.png not found in repository root"
+            echo "ERROR: icon.png not found in repository root"
             exit 1
           fi
 
-          cp "icon.png" "$RES/drawable/app_icon.png"
+          echo "RES = $RES"
+          echo "MANIFEST = $MANIFEST"
 
+          # Create launcher icon folders
+          mkdir -p "$RES/mipmap-mdpi"
+          mkdir -p "$RES/mipmap-hdpi"
+          mkdir -p "$RES/mipmap-xhdpi"
+          mkdir -p "$RES/mipmap-xxhdpi"
+          mkdir -p "$RES/mipmap-xxxhdpi"
+
+          # Copy icon into all launcher density folders
+          cp icon.png "$RES/mipmap-mdpi/app_icon.png"
+          cp icon.png "$RES/mipmap-hdpi/app_icon.png"
+          cp icon.png "$RES/mipmap-xhdpi/app_icon.png"
+          cp icon.png "$RES/mipmap-xxhdpi/app_icon.png"
+          cp icon.png "$RES/mipmap-xxxhdpi/app_icon.png"
+
+          # Remove any old icon reference
           sed -i 's/ android:icon="[^"]*"//g' "$MANIFEST"
 
-          sed -i 's#<application #<application android:icon="@drawable/app_icon" #' "$MANIFEST"
+          # Add new launcher icon
+          sed -i 's/<application[[:space:]]*/<application android:icon="@mipmap\/app_icon" /' "$MANIFEST"
 
-          echo "App icon successfully added."
+          echo "Checking final manifest:"
+          grep -n "application" "$MANIFEST"
+
+          echo "Hindi Dub Player launcher icon installed successfully."
 
       - name: Add Internet Permission & Orientation Config Fix
         run: |

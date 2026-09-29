@@ -120,7 +120,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Add Enhanced Modern VLC-Style Player & Adaptive UI
+      - name: Add Cinematic Netflix Dubbing Engine & Adaptive UI
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -259,7 +259,7 @@ jobs:
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
               private var voiceTypeIndex = 0
-              private var dubStyleKey = "emotional"
+              private var dubStyleKey = "netflix"
               private var currentPlaybackSpeed = 1.0f
 
               private lateinit var audioManager: AudioManager
@@ -301,8 +301,9 @@ jobs:
               )
 
               private val styleNames = arrayOf(
-                  "🎭 इमोशनल / नेचुरल (Emotional)",
-                  "📖 किताबी (Formal Textbook)"
+                  "🎬 नेटफ्लिक्स / सिनेमाई (Cinematic Dub)",
+                  "🍿 कैजुअल हिंग्लिश (Casual Hinglish)",
+                  "📖 फॉर्मल हिंदी (Formal Hindi)"
               )
 
               private val speedOptions = arrayOf(
@@ -350,7 +351,7 @@ jobs:
                   targetLangCode = prefs.getString("LANG_CODE", "hi") ?: "hi"
                   targetLangName = prefs.getString("LANG_NAME", "Hindi") ?: "Hindi"
                   voiceTypeIndex = prefs.getInt("VOICE_INDEX", 0)
-                  dubStyleKey = prefs.getString("DUB_STYLE", "emotional") ?: "emotional"
+                  dubStyleKey = prefs.getString("DUB_STYLE", "netflix") ?: "netflix"
                   currentPlaybackSpeed = prefs.getFloat("PLAY_SPEED", 1.0f)
 
                   rootFrame = FrameLayout(this).apply {
@@ -398,7 +399,7 @@ jobs:
                       textSize = 15f
                       setTextColor(Color.parseColor("#FFD54F"))
                       setTypeface(null, Typeface.BOLD)
-                      background = createRoundedDrawable(Color.parseColor("#CC121212"), dpToPx(10).toFloat())
+                      background = createRoundedDrawable(Color.parseColor("#D9121212"), dpToPx(10).toFloat())
                       gravity = Gravity.CENTER
                       setPadding(dpToPx(18), dpToPx(8), dpToPx(18), dpToPx(8))
                       visibility = View.GONE
@@ -518,7 +519,7 @@ jobs:
                   speedPillBtn = createModernPill("⚡ ${currentPlaybackSpeed}x ▼") { showSpeedSelector() }
                   pillRow.addView(speedPillBtn)
 
-                  stylePillBtn = createModernPill(if (dubStyleKey == "emotional") "🎭 इमोशनल ▼" else "📖 किताबी ▼") { showStyleSelector() }
+                  stylePillBtn = createModernPill(if (dubStyleKey == "netflix") "🎬 नेटफ्लिक्स ▼" else if (dubStyleKey == "hinglish") "🍿 हिंग्लिश ▼" else "📖 फॉर्मल ▼") { showStyleSelector() }
                   pillRow.addView(stylePillBtn)
 
                   val settingsPill = createModernPill("⚙️ Settings") { showSettingsDialog() }
@@ -605,7 +606,7 @@ jobs:
                   }
 
                   translatedTitleView = TextView(this).apply {
-                      text = "HINDI DUBBING ($targetLangName)"
+                      text = "CINEMATIC DUBBING ($targetLangName)"
                       textSize = 11f
                       setTextColor(Color.parseColor("#F57C00"))
                       setTypeface(null, Typeface.BOLD)
@@ -617,7 +618,7 @@ jobs:
                   translatedCard.addView(translatedTitleView)
 
                   translatedContentView = TextView(this).apply {
-                      text = "Dubbed audio stream and text will display here naturally."
+                      text = "Expressive Netflix-grade Hindi dialogue stream will flow here."
                       textSize = 16f
                       setTextColor(Color.parseColor("#BF360C"))
                       setTypeface(null, Typeface.BOLD)
@@ -733,7 +734,7 @@ jobs:
                   topBarOverlay.addView(topBarBackBtn)
 
                   topBarTitleView = TextView(this).apply {
-                      text = "  HindiDub Player"
+                      text = "  HindiDub Player (Netflix HD)"
                       textSize = 13f
                       setTextColor(Color.WHITE)
                       setTypeface(null, Typeface.BOLD)
@@ -1269,7 +1270,7 @@ jobs:
                           targetLangCode = chosen.first
                           targetLangName = chosen.second
                           langPillBtn.text = "🌐 $targetLangName ▼"
-                          translatedTitleView.text = "DUBBING ($targetLangName)"
+                          translatedTitleView.text = "CINEMATIC DUBBING ($targetLangName)"
 
                           getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
                               .putString("LANG_CODE", targetLangCode)
@@ -1307,8 +1308,16 @@ jobs:
                   AlertDialog.Builder(this)
                       .setTitle("Dubbing Style")
                       .setItems(styleNames) { _, which ->
-                          dubStyleKey = if (which == 0) "emotional" else "formal"
-                          stylePillBtn.text = if (dubStyleKey == "emotional") "🎭 इमोशनल ▼" else "📖 किताबी ▼"
+                          dubStyleKey = when (which) {
+                              0 -> "netflix"
+                              1 -> "hinglish"
+                              else -> "formal"
+                          }
+                          stylePillBtn.text = when (dubStyleKey) {
+                              "netflix" -> "🎬 नेटफ्लिक्स ▼"
+                              "hinglish" -> "🍿 हिंग्लिश ▼"
+                              else -> "📖 फॉर्मल ▼"
+                          }
 
                           getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
                               .putString("DUB_STYLE", dubStyleKey)
@@ -1331,6 +1340,7 @@ jobs:
                   }
               }
 
+              // Ultra-Natural Google Studio Neural Voice Matcher
               private fun applyCharacterVoice(speakerType: String) {
                   try {
                       val voices = tts?.voices ?: emptySet()
@@ -1359,10 +1369,13 @@ jobs:
                           }
                       }
 
+                      // Target highest fidelity neural engine (Neural2, Wavenet, Journey)
                       val bestVoice = candidateVoices.maxByOrNull { voice ->
                           var score = 0
                           val n = voice.name.lowercase()
-                          if (n.contains("neural") || n.contains("wavenet")) score += 50
+                          if (n.contains("neural2")) score += 80
+                          else if (n.contains("wavenet")) score += 60
+                          else if (n.contains("neural")) score += 50
                           if (n.contains("x-")) score += 30
                           if (n.contains("network")) score += 20
                           if (voice.quality >= Voice.QUALITY_VERY_HIGH) score += 40
@@ -1374,25 +1387,27 @@ jobs:
                           tts?.voice = bestVoice
                       }
 
+                      // Dynamic Cinematic Prosody (Human Chest & Tone Resonance)
                       var naturalPitch = 1.0f
-                      var naturalRate = 1.02f
+                      var naturalRate = 1.0f
 
                       when (effectiveRole) {
                           "woman" -> {
-                              naturalPitch = 1.05f
+                              naturalPitch = 1.01f
                               naturalRate = 1.02f
                           }
                           "girl" -> {
-                              naturalPitch = 1.14f
-                              naturalRate = 1.04f
+                              naturalPitch = 1.08f
+                              naturalRate = 1.03f
                           }
                           "boy" -> {
-                              naturalPitch = 1.10f
-                              naturalRate = 1.04f
+                              naturalPitch = 1.04f
+                              naturalRate = 1.02f
                           }
                           else -> {
-                              naturalPitch = 0.96f
-                              naturalRate = 1.02f
+                              // Deep, rich male protagonist timbre
+                              naturalPitch = 0.94f
+                              naturalRate = 1.00f
                           }
                       }
 
@@ -1400,8 +1415,8 @@ jobs:
                       tts?.setSpeechRate(naturalRate * currentPlaybackSpeed)
 
                   } catch (e: Exception) {
-                      tts?.setPitch(1.0f)
-                      tts?.setSpeechRate(1.02f * currentPlaybackSpeed)
+                      tts?.setPitch(0.96f)
+                      tts?.setSpeechRate(1.0f * currentPlaybackSpeed)
                   }
               }
 
@@ -1448,7 +1463,7 @@ jobs:
                   val options = arrayOf(
                       "Target: $targetLangName ($targetLangCode)",
                       "Voice: ${voiceNames[voiceTypeIndex]}",
-                      "Style: ${if (dubStyleKey == "emotional") "Emotional" else "Formal"}",
+                      "Style: ${if (dubStyleKey == "netflix") "Cinematic Netflix Dub" else if (dubStyleKey == "hinglish") "Modern Hinglish" else "Formal Hindi"}",
                       "Speed: ${currentPlaybackSpeed}x",
                       "Cached Dialogues: $activeCount",
                       "Stop Dubbing"
@@ -1978,36 +1993,37 @@ jobs:
                   return segmentsList
               }
 
+              // Netflix Cinematic & Anime Dub Director Master Prompt
               private fun buildMasterSystemPrompt(targetLang: String, style: String): String {
                   return """
-                  You are a master anime, movie, and web series dubbing director. Translate the input array of dialogues into natural, expressive, conversational $targetLang in native Devanagari script.
+                  You are an elite Netflix / Crunchyroll Hindi Anime Dubbing Voice Director.
+                  Your mission is to adapt dialogue into hyper-natural, cinematic, and punchy Hindi/Hinglish in Devanagari script so that it sounds like real humans in an expensive anime movie, NEVER like robotic machine translation.
 
-                  CRITICAL DUBBING & GRAMMAR RULES:
-                  1. STRICT GENDER-VERB AGREEMENT (लिंग भेद का कड़ाई से पालन):
-                     - Accurately identify each speaker's character & role: 'man', 'woman', 'boy', or 'girl'.
-                     - If speaker is 'woman' or 'girl': First-person verbs and adjectives MUST be strictly FEMININE (e.g., 'करती हूँ', 'जा रही हूँ', 'सोचती हूँ', 'मेरी', 'आई हूँ', 'बताऊँगी', 'खुश हूँ'). NEVER use masculine verbs like 'करता हूँ' or 'जा रहा हूँ' for female characters!
-                     - If speaker is 'man' or 'boy': First-person verbs MUST be strictly MASCULINE (e.g., 'करता हूँ', 'जा रहा हूँ', 'सोचता हूँ', 'मेरा', 'आया हूँ', 'बताऊँगा'). NEVER use 'करती हूँ' for male characters!
+                  GOLDEN CINEMATIC DUBBING PRINCIPLES:
+                  1. AUTHENTIC VOCAL CADENCE & NATURAL FILLERS:
+                     - Don't just translate words; translate the breath, emotion, and attitude of the scene!
+                     - Blend natural spoken conversational fillers organically:
+                       * 'अरे यार...', 'सुनो,', 'वेट...', 'ओह!', 'रुको जरा,', 'व्हाट?!', 'मतलब कुछ भी!', 'सीरियसली!', 'नो वे!'
+                     - Break rigid long sentences into snappy, natural dialogue punches.
 
-                  2. NATURAL CONVERSATION & LOANWORDS (स्वाभाविक बोलचाल):
-                     - Do NOT translate common everyday modern words into archaic or textbook Sanskrit/Hindi!
-                     - Keep commonly spoken modern loanwords as natural Devanagari words:
-                       * Write 'डॉक्टर' (NEVER 'चिकित्सक')
-                       * Write 'पुलिस' (NEVER 'आरक्षी')
-                       * Write 'कार', 'बस', 'ट्रेन', 'स्टेशन', 'स्कूल', 'कॉलेज', 'फोन', 'कॉल', 'मैसेज', 'सर', 'मैडम', 'बॉस', 'टीम', 'कैप्टन', 'मिशन', 'प्लान', 'प्रॉब्लम', 'टेंशन', 'आइडिया', 'चांस', 'ओके', 'सॉरी', 'थैंक यू', 'प्लीज', 'गिफ्ट', 'पार्टी'.
-                     - The dialogue MUST sound like authentic cinema/anime dubbing, not a written translation.
+                  2. 100% ELIMINATE ARCHAIC BOOKISH HINDI:
+                     - STRICTLY FORBIDDEN words: 'भूभाग', 'जटिल', 'प्रतीक्षा', 'प्रस्थान', 'कदापि', 'सामर्थ्य', 'अवश्य', 'संदेह', 'मित्रवर'.
+                     - Use real spoken Indian urban vocabulary in Devanagari:
+                       'एरिया', 'प्रॉब्लम', 'टेंशन', 'आइडिया', 'वेट', 'सीरियस', 'प्लान', 'लोकेशन', 'चेक', 'ट्रैक', 'रेडी', 'फोकस', 'चांस', 'कॉम्प्लिकेटेड', 'इम्पॉसिबल', 'सॉरी', 'थैंक यू', 'प्लीज', 'ओके', 'कम ऑन', 'लेट्स गो', 'बॉस', 'गाइज', 'डेंजरस', 'मिस', 'कॉल', 'मैसेज', 'फोन', 'टीम'.
 
-                  3. NO PUNCTUATION ARTIFACTS:
-                     - NEVER output English dots (.), commas (,), semicolons (;), colons (:), or ellipsis (...). The TTS vocalizes them as 'dot' or 'comma'!
-                     - Use ONLY the Devanagari purna viram (।) to mark pauses or ends of sentences.
-                     - Write all abbreviations in full spoken Devanagari (write 'डॉक्टर' not 'Dr.', 'मिस्टर' not 'Mr.').
+                  3. STRICT CHARACTER & GENDER-VERB INFLECTION:
+                     - Accurately determine speaker character: 'man', 'woman', 'boy', 'girl'.
+                     - Female / Girl: First-person verbs & possessives MUST be feminine ('करती हूँ', 'जा रही हूँ', 'सोचती हूँ', 'बताऊँगी', 'मेरी', 'खुश हूँ'). NEVER use masculine verbs ('करता हूँ', 'जा रहा हूँ') for female characters!
+                     - Male / Boy: First-person verbs MUST be masculine ('करता हूँ', 'जा रहा हूँ', 'सोचता हूँ', 'बताऊँगा', 'मेरा').
 
-                  4. CONTEXTUAL & IDIOMATIC ACCURACY:
-                     - Translate the true emotional tone, sarcasm, fear, or urgency of the dialogue. Avoid literal word-for-word translation.
+                  4. BREATHING & RHYTHMIC PUNCTUATION:
+                     - To create natural human breathing in TTS, use ONLY commas (,) for quick 120ms pauses and Devanagari purna viram (।) for natural sentence ends.
+                     - NEVER output English dots (.), semicolons (;), or ellipsis (...). Write abbreviations in full ('डॉक्टर', 'मिस्टर').
 
                   OUTPUT FORMAT:
                   Output ONLY a valid JSON array of objects:
-                  [{"text": "स्वाभाविक संवाद।", "speaker": "woman"}]
-                  No explanation, no markdown backticks.
+                  [{"text": "अरे यार, यह एरिया तो काफी डेंजरस और कॉम्प्लिकेटेड लग रहा है।", "speaker": "man"}]
+                  No explanation, no markdown ticks, only pure JSON.
                   """.trimIndent()
               }
 
@@ -2045,7 +2061,7 @@ jobs:
                               })
                           }
                           put("messages", messages)
-                          put("temperature", 0.1)
+                          put("temperature", 0.15)
                       }
 
                       conn.outputStream.use { it.write(payload.toString().toByteArray()) }
@@ -2115,7 +2131,7 @@ jobs:
                               }
                               put("messages", messages)
                               put("max_tokens", 250)
-                              put("temperature", 0.1)
+                              put("temperature", 0.15)
                           }
 
                           conn.outputStream.use { it.write(payload.toString().toByteArray()) }
@@ -2164,6 +2180,7 @@ jobs:
                   return true
               }
 
+              // Human Micro-Pausing & Clean Dialogue Filter
               private fun cleanTextForDubbing(text: String, langCode: String): String {
                   var res = text.trim()
 
@@ -2176,14 +2193,14 @@ jobs:
                   res = res.replace(Regex("(?i)\\b(ok|okay)\\b"), "ओके")
                   res = res.replace(Regex("(?i)\\b(sir)\\b"), "सर")
 
-                  res = res.replace("...", " ")
-                  res = res.replace("..", " ")
+                  // Replace dots and pauses with micro-breaths
+                  res = res.replace("...", ", ")
+                  res = res.replace("..", ", ")
                   res = res.replace(".", "। ")
-                  res = res.replace(",", " ")
-                  res = res.replace(";", " ")
-                  res = res.replace(":", " ")
                   res = res.replace("!", "। ")
                   res = res.replace("?", "। ")
+                  res = res.replace(";", ", ")
+                  res = res.replace(":", ", ")
                   res = res.replace("-", " ")
                   res = res.replace("—", " ")
                   res = res.replace("/", " ")
@@ -2199,6 +2216,7 @@ jobs:
                   res = res.replace(Regex("\\b(डॉट|कॉमा|पॉइंट|डैश|फुल स्टॉप)\\b"), " ")
 
                   res = res.replace(Regex("।+"), "।")
+                  res = res.replace(Regex(",+"), ",")
                   res = res.replace(Regex("\\s+"), " ").trim()
 
                   return res
@@ -2232,7 +2250,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully updated with Gender Grammar & Natural Loanwords Dubbing"
+          echo "MainActivity successfully upgraded to Cinematic Netflix Dub Engine"
 
       - name: Build Debug APK
         run: |
@@ -2247,5 +2265,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-StudioVoice-apk
+          name: HindiDubPlayer-NetflixDub-apk
           path: "**/build/outputs/apk/debug/*.apk"

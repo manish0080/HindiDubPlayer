@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Complete and Fully Fixed MainActivity
+      - name: Inject Complete MainActivity with Dedicated Original Audio Controls
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -177,7 +177,6 @@ jobs:
           import android.speech.tts.Voice
           import android.view.Gravity
           import android.view.View
-          import android.view.WindowInsets
           import android.view.WindowManager
           import android.widget.Button
           import android.widget.FrameLayout
@@ -255,9 +254,11 @@ jobs:
               private lateinit var playerTimeTotal: TextView
               private lateinit var playerPlayPauseBtn: Button
               private lateinit var switchHindiDub: Switch
-              private lateinit var switchOriginalMute: Switch
               private lateinit var volumeSeekBar: SeekBar
               private lateinit var volumePercentText: TextView
+              private lateinit var switchOriginalMute: Switch
+              private lateinit var originalVolumeSeekBar: SeekBar
+              private lateinit var originalVolumePercentText: TextView
 
               private lateinit var settingSourceLangVal: TextView
               private lateinit var settingTargetLangVal: TextView
@@ -298,7 +299,8 @@ jobs:
               private var voiceTypeIndex = 0
               private var currentPlaybackSpeed = 1.0f
               private var isHindiDubEnabled = true
-              private var isOriginalMuted = true
+              private var isOriginalMuted = false
+              private var originalVolumeLevel = 0.50f
               private var isDebugLoggingEnabled = false
 
               private var cachedMaleVoice: Voice? = null
@@ -995,7 +997,7 @@ jobs:
 
                   val btnRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
+                      gravity = Gravity.CENTER
                       setPadding(0, dpToPx(6), 0, dpToPx(6))
                   }
 
@@ -1065,11 +1067,11 @@ jobs:
                   audioCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = createCardDrawable(Color.parseColor("#171A24"), Color.parseColor("#252A3A"), dpToPx(14).toFloat(), dpToPx(1))
-                      setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(14))
+                      setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12))
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                           marginStart = dpToPx(14)
                           marginEnd = dpToPx(14)
-                          bottomMargin = dpToPx(14)
+                          bottomMargin = dpToPx(12)
                       }
                       layoutParams = p
                   }
@@ -1080,17 +1082,18 @@ jobs:
                       setTypeface(null, Typeface.BOLD)
                       setTextColor(Color.WHITE)
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(10)
+                          bottomMargin = dpToPx(8)
                       }
                       layoutParams = p
                   }
                   audioCard.addView(audioHeader)
 
+                  // 1. Hindi Dub Switch & Slider
                   val rowDub = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          bottomMargin = dpToPx(8)
+                          bottomMargin = dpToPx(4)
                       }
                       layoutParams = p
                   }
@@ -1111,7 +1114,7 @@ jobs:
                   rowDub.addView(switchHindiDub)
                   audioCard.addView(rowDub)
 
-                  val rowMute = LinearLayout(this).apply {
+                  val volRowHindi = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
@@ -1119,39 +1122,12 @@ jobs:
                       }
                       layoutParams = p
                   }
-                  val txtMute = TextView(this).apply {
-                      text = "Original English Audio (Smart 50% BGM Ducking)"
-                      textSize = 12f
-                      setTextColor(Color.parseColor("#E0E6ED"))
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                  }
-                  rowMute.addView(txtMute)
-                  switchOriginalMute = Switch(this).apply {
-                      isChecked = true
-                      setOnCheckedChangeListener { _, checked ->
-                          isOriginalMuted = checked
-                          applyAudioMuteState()
-                      }
-                  }
-                  rowMute.addView(switchOriginalMute)
-                  audioCard.addView(rowMute)
-
-                  val volLabel = TextView(this).apply {
-                      text = "Hindi Volume"
+                  val volIconHindi = TextView(this).apply {
+                      text = "🗣️ Vol "
                       textSize = 11f
                       setTextColor(Color.parseColor("#8B99A8"))
                   }
-                  audioCard.addView(volLabel)
-
-                  val volRow = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
-                  }
-                  val volIcon = TextView(this).apply {
-                      text = "🔈 "
-                      textSize = 13f
-                  }
-                  volRow.addView(volIcon)
+                  volRowHindi.addView(volIconHindi)
 
                   volumeSeekBar = SeekBar(this).apply {
                       max = 100
@@ -1168,15 +1144,79 @@ jobs:
                           override fun onStopTrackingTouch(sb: SeekBar?) {}
                       })
                   }
-                  volRow.addView(volumeSeekBar)
+                  volRowHindi.addView(volumeSeekBar)
 
                   volumePercentText = TextView(this).apply {
                       text = "100%"
                       textSize = 11f
                       setTextColor(Color.WHITE)
                   }
-                  volRow.addView(volumePercentText)
-                  audioCard.addView(volRow)
+                  volRowHindi.addView(volumePercentText)
+                  audioCard.addView(volRowHindi)
+
+                  // 2. Original Audio Mute Switch & Volume Slider (Default 50%)
+                  val rowOrigMute = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          bottomMargin = dpToPx(4)
+                      }
+                      layoutParams = p
+                  }
+                  val txtOrigMute = TextView(this).apply {
+                      text = "Mute Original Audio (म्यूट करें)"
+                      textSize = 12f
+                      setTextColor(Color.parseColor("#E0E6ED"))
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+                  rowOrigMute.addView(txtOrigMute)
+                  switchOriginalMute = Switch(this).apply {
+                      isChecked = false
+                      setOnCheckedChangeListener { _, checked ->
+                          isOriginalMuted = checked
+                          applyAudioMuteState()
+                      }
+                  }
+                  rowOrigMute.addView(switchOriginalMute)
+                  audioCard.addView(rowOrigMute)
+
+                  val volRowOrig = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                  }
+                  val volIconOrig = TextView(this).apply {
+                      text = "🎵 BGM "
+                      textSize = 11f
+                      setTextColor(Color.parseColor("#8B99A8"))
+                  }
+                  volRowOrig.addView(volIconOrig)
+
+                  originalVolumeSeekBar = SeekBar(this).apply {
+                      max = 100
+                      progress = 50
+                      val p = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      layoutParams = p
+                      progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#00E5FF"))
+                      thumbTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#00E5FF"))
+                      setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                          override fun onProgressChanged(sb: SeekBar?, prog: Int, fromUser: Boolean) {
+                              originalVolumeLevel = (prog / 100f).coerceIn(0f, 1f)
+                              originalVolumePercentText.text = "$prog%"
+                              applyAudioMuteState()
+                          }
+                          override fun onStartTrackingTouch(sb: SeekBar?) {}
+                          override fun onStopTrackingTouch(sb: SeekBar?) {}
+                      })
+                  }
+                  volRowOrig.addView(originalVolumeSeekBar)
+
+                  originalVolumePercentText = TextView(this).apply {
+                      text = "50%"
+                      textSize = 11f
+                      setTextColor(Color.WHITE)
+                  }
+                  volRowOrig.addView(originalVolumePercentText)
+                  audioCard.addView(volRowOrig)
 
                   viewPlayer.addView(audioCard)
                   fadeInControls()
@@ -1256,8 +1296,8 @@ jobs:
                       Toast.makeText(this, "कैश साफ़ कर दिया गया", Toast.LENGTH_SHORT).show()
                   })
 
-                  container.addView(createSettingItem("हमसे संपर्क करें", "हिंदी डब प्लेयर v5.3 ›", TextView(this)) {
-                      Toast.makeText(this, "Hindi Dub Player v5.3 • Auto 50% Music Ducking", Toast.LENGTH_LONG).show()
+                  container.addView(createSettingItem("हमसे संपर्क करें", "हिंदी डब प्लेयर v5.4 ›", TextView(this)) {
+                      Toast.makeText(this, "Hindi Dub Player v5.4 • Dedicated BGM Slider", Toast.LENGTH_LONG).show()
                   })
 
                   viewSettings.addView(container)
@@ -1643,18 +1683,20 @@ jobs:
                   }
               }
 
-              // SMART 50% AUTO-DUCKING:
-              // When speech is inactive -> original sound plays at 50% (0.50f) volume
-              // When dialogue speaks -> original sound ducks down to 8% (0.08f) so English dialogue is suppressed
+              // SMART ORIGINAL AUDIO CONTROLS:
+              // 1. If mute toggle is ON -> complete 0.0f silence
+              // 2. If dialogue speaks -> duck to 8% (0.08f) so English words are suppressed
+              // 3. When dialogue stops -> plays BGM at slider percentage (e.g. 50% default)
               private fun applyAudioMuteState() {
                   if (isOriginalMuted) {
-                      if (isSpeechActive.get()) {
-                          mediaPlayerRef?.setVolume(0.08f, 0.08f)
-                      } else {
-                          mediaPlayerRef?.setVolume(0.50f, 0.50f)
-                      }
+                      mediaPlayerRef?.setVolume(0f, 0f)
                   } else {
-                      mediaPlayerRef?.setVolume(1.0f, 1.0f)
+                      val targetVol = if (isSpeechActive.get()) {
+                          (originalVolumeLevel * 0.15f).coerceAtMost(0.08f)
+                      } else {
+                          originalVolumeLevel
+                      }
+                      mediaPlayerRef?.setVolume(targetVol, targetVol)
                   }
               }
 
@@ -2410,7 +2452,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with 50% music ducking and stable build."
+          echo "MainActivity successfully rewritten with dedicated BGM slider and stable build."
 
       - name: Build Debug APK
         run: |

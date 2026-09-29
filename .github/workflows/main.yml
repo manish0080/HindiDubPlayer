@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Clean and Stable MainActivity
+      - name: Inject Masterpiece Code with VLC Style 3.5s Auto-Hiding Controls
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -177,7 +177,6 @@ jobs:
           import android.speech.tts.Voice
           import android.view.Gravity
           import android.view.View
-          import android.view.WindowInsets
           import android.view.WindowManager
           import android.widget.Button
           import android.widget.FrameLayout
@@ -262,6 +261,14 @@ jobs:
               private lateinit var settingCacheVal: TextView
               private lateinit var switchDebugLog: Switch
 
+              // VLC Overlay Elements
+              private lateinit var overlayControlsLayout: LinearLayout
+              private lateinit var playerTopBar: LinearLayout
+              private lateinit var controlSection: LinearLayout
+              private lateinit var subtitleContainer: LinearLayout
+              private val hideControlsHandler = Handler(Looper.getMainLooper())
+              private val hideControlsRunnable = Runnable { fadeOutControls() }
+
               private var selectedVideoUri: Uri? = null
               private var tts: TextToSpeech? = null
               private var mediaPlayerRef: MediaPlayer? = null
@@ -314,7 +321,7 @@ jobs:
                   "🎭 Auto (पात्र अनुसार)",
                   "🎙️ Man (कड़क मर्द)",
                   "🎙️ Woman (महिला)",
-                  "🎙️ Boy (लड़का)",
+                  "🎙️️ Boy (लड़का)",
                   "🎙️ Girl (लड़की)"
               )
 
@@ -369,18 +376,10 @@ jobs:
                       )
                   }
 
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                      mainLayout.setOnApplyWindowInsetsListener { v, insets ->
-                          val statusBarHeight = insets.getInsets(WindowInsets.Type.statusBars()).top
-                          v.setPadding(0, statusBarHeight, 0, 0)
-                          insets
-                      }
-                  }
-
                   screenContainer = FrameLayout(this).apply {
                       layoutParams = LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          0,
                           1f
                       )
                   }
@@ -487,6 +486,31 @@ jobs:
                           dpToPx(210)
                       )
                   }
+                  fadeInControls()
+              }
+
+              private fun toggleControlsVisibility() {
+                  if (overlayControlsLayout.visibility == View.VISIBLE) {
+                      fadeOutControls()
+                  } else {
+                      fadeInControls()
+                  }
+              }
+
+              private fun fadeInControls() {
+                  hideControlsHandler.removeCallbacks(hideControlsRunnable)
+                  playerTopBar.visibility = View.VISIBLE
+                  controlSection.visibility = View.VISIBLE
+                  subtitleContainer.visibility = View.VISIBLE
+                  overlayControlsLayout.visibility = View.VISIBLE
+                  hideControlsHandler.postDelayed(hideControlsRunnable, 3500)
+              }
+
+              private fun fadeOutControls() {
+                  playerTopBar.visibility = View.GONE
+                  controlSection.visibility = View.GONE
+                  subtitleContainer.visibility = View.GONE
+                  overlayControlsLayout.visibility = View.GONE
               }
 
               private fun buildHomeScreen() {
@@ -857,10 +881,29 @@ jobs:
                       visibility = View.GONE
                   }
 
-                  val playerTopBar = LinearLayout(this).apply {
+                  overlayControlsLayout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+                      setBackgroundColor(Color.TRANSPARENT)
+                  }
+
+                  playerContainer = FrameLayout(this).apply {
+                      setBackgroundColor(Color.BLACK)
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+                      setOnClickListener { toggleControlsVisibility() }
+                  }
+
+                  playerVideoView = VideoView(this).apply {
+                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER)
+                  }
+                  playerContainer.addView(playerVideoView)
+                  viewPlayer.addView(playerContainer)
+
+                  playerTopBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                       setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12))
+                      setBackgroundColor(Color.parseColor("#99000000"))
                   }
                   val backBtn = TextView(this).apply {
                       text = "←"
@@ -878,23 +921,18 @@ jobs:
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                   }
                   playerTopBar.addView(topTitle)
-                  viewPlayer.addView(playerTopBar)
+                  overlayControlsLayout.addView(playerTopBar)
 
-                  playerContainer = FrameLayout(this).apply {
-                      setBackgroundColor(Color.BLACK)
-                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(210))
+                  val spacer = View(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+                      setOnClickListener { toggleControlsVisibility() }
                   }
+                  overlayControlsLayout.addView(spacer)
 
-                  playerVideoView = VideoView(this).apply {
-                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER)
-                  }
-                  playerContainer.addView(playerVideoView)
-                  viewPlayer.addView(playerContainer)
-
-                  val subtitleContainer = LinearLayout(this).apply {
+                  subtitleContainer = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setPadding(dpToPx(16), dpToPx(6), dpToPx(16), dpToPx(6))
-                      setBackgroundColor(Color.parseColor("#090A0F"))
+                      setBackgroundColor(Color.parseColor("#99090A0F"))
                   }
 
                   originalSubtitleText = TextView(this).apply {
@@ -917,11 +955,12 @@ jobs:
                       text = "हिंदी डब: [डबिंग स्ट्रीम यहाँ दिखेगी]"
                   }
                   subtitleContainer.addView(playerSubtitleText)
-                  viewPlayer.addView(subtitleContainer)
+                  overlayControlsLayout.addView(subtitleContainer)
 
-                  val controlSection = LinearLayout(this).apply {
+                  controlSection = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setPadding(dpToPx(16), dpToPx(6), dpToPx(16), dpToPx(12))
+                      setBackgroundColor(Color.parseColor("#990F1017"))
                   }
 
                   val timeRow = LinearLayout(this).apply {
@@ -1010,7 +1049,9 @@ jobs:
                   btnRow.addView(fullBtn)
 
                   controlSection.addView(btnRow)
-                  viewPlayer.addView(controlSection)
+                  overlayControlsLayout.addView(controlSection)
+
+                  viewPlayer.addView(overlayControlsLayout)
 
                   val audioCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -1019,6 +1060,7 @@ jobs:
                       val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                           marginStart = dpToPx(14)
                           marginEnd = dpToPx(14)
+                          bottomMargin = dpToPx(14)
                       }
                       layoutParams = p
                   }
@@ -1128,6 +1170,7 @@ jobs:
                   audioCard.addView(volRow)
 
                   viewPlayer.addView(audioCard)
+                  fadeInControls()
               }
 
               private fun buildSettingsScreen() {
@@ -1204,8 +1247,8 @@ jobs:
                       Toast.makeText(this, "कैश साफ़ कर दिया गया", Toast.LENGTH_SHORT).show()
                   })
 
-                  container.addView(createSettingItem("हमसे संपर्क करें", "हिंदी डब प्लेयर v4.8 ›", TextView(this)) {
-                      Toast.makeText(this, "Hindi Dub Player v4.8 • Stable", Toast.LENGTH_LONG).show()
+                  container.addView(createSettingItem("हमसे संपर्क करें", "हिंदी डब प्लेयर v4.11 ›", TextView(this)) {
+                      Toast.makeText(this, "Hindi Dub Player v4.11 • VLC Overlay Mode", Toast.LENGTH_LONG).show()
                   })
 
                   viewSettings.addView(container)
@@ -1360,6 +1403,7 @@ jobs:
                       }
                       playerVideoView.start()
                       playerPlayPauseBtn.text = "⏸"
+                      fadeInControls()
                   }
               }
 
@@ -1638,7 +1682,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with complete stable alignment."
+          echo "MainActivity successfully rewritten with VLC style overlays."
 
       - name: Build Debug APK
         run: |
@@ -1653,5 +1697,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-StableBuild-apk
+          name: HindiDubPlayer-VLCOverlay-apk
           path: "**/build/outputs/apk/debug/*.apk"

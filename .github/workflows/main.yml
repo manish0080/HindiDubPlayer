@@ -36,7 +36,7 @@ jobs:
           fi
 
             - name: Add App Icon
-            Run: |
+              run: |
           echo "Installing Hindi Dub Player launcher icon..."
 
           # Find Android project

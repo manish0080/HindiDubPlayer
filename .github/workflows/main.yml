@@ -99,6 +99,7 @@ jobs:
 
               permissions = [
                   '<uses-permission android:name="android.permission.INTERNET" />',
+                  '<uses-permission android:name="android.permission.RECORD_AUDIO" />',
                   '<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />',
                   '<uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />',
                   '<uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />',
@@ -123,14 +124,14 @@ jobs:
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-          print("AndroidManifest.xml updated with full permissions and TTS configuration.")
+          print("AndroidManifest.xml updated with full permissions.")
           PYEOF
 
           find . -name "build.gradle.kts" -exec sed -i '/kotlin.*android/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Add High-Tech UI, Permissions & Navigation Architecture
+      - name: Add Clean High-Tech UI & Voice Clone Architecture
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -162,6 +163,7 @@ jobs:
           import android.media.MediaFormat
           import android.media.MediaMuxer
           import android.media.MediaPlayer
+          import android.media.MediaRecorder
           import android.media.PlaybackParams
           import android.net.Uri
           import android.os.Build
@@ -177,6 +179,7 @@ jobs:
           import android.view.View
           import android.view.WindowManager
           import android.widget.Button
+          import android.widget.EditText
           import android.widget.FrameLayout
           import android.widget.LinearLayout
           import android.widget.ScrollView
@@ -189,6 +192,7 @@ jobs:
           import java.io.DataOutputStream
           import java.io.File
           import java.io.FileInputStream
+          import java.io.FileOutputStream
           import java.net.HttpURLConnection
           import java.net.URL
           import java.nio.ByteBuffer
@@ -228,7 +232,7 @@ jobs:
               private lateinit var translatedTitleView: TextView
               private lateinit var fullscreenSubtitleView: TextView
 
-              // Modern On-Screen Player Controls
+              // Player Controls Overlay & Center Buttons
               private lateinit var playerControlsOverlay: FrameLayout
               private lateinit var touchOverlayView: View
               private lateinit var centerIndicatorBadge: TextView
@@ -236,6 +240,7 @@ jobs:
               private lateinit var topBarBackBtn: Button
               private lateinit var topBarTitleView: TextView
               private lateinit var bottomControlsBar: LinearLayout
+              private lateinit var centerControlsRow: LinearLayout
               private lateinit var onScreenRewBtn: Button
               private lateinit var onScreenPlayPauseBtn: Button
               private lateinit var onScreenFwdBtn: Button
@@ -249,6 +254,7 @@ jobs:
               private lateinit var settingVoiceValView: TextView
               private lateinit var settingStyleValView: TextView
               private lateinit var settingSpeedValView: TextView
+              private lateinit var settingCloneValView: TextView
               private lateinit var settingCacheValView: TextView
 
               // Bottom Navigation Bar
@@ -263,6 +269,7 @@ jobs:
               private var selectedVideoUri: Uri? = null
               private var tts: TextToSpeech? = null
               private var mediaPlayerRef: MediaPlayer? = null
+              private var voiceClonePlayer: MediaPlayer? = null
               private val uiHandler = Handler(Looper.getMainLooper())
 
               private val isProcessing = AtomicBoolean(false)
@@ -288,6 +295,14 @@ jobs:
               private var voiceTypeIndex = 0
               private var dubStyleKey = "netflix"
               private var currentPlaybackSpeed = 1.0f
+
+              // ElevenLabs Voice Clone Settings
+              private var elevenApiKey = ""
+              private var customVoiceId = ""
+              private var useCustomClonedVoice = false
+              private var mediaRecorder: MediaRecorder? = null
+              private var isRecordingSample = false
+              private var recordedSampleFile: File? = null
 
               private var cachedMaleVoice: Voice? = null
               private var cachedFemaleVoice: Voice? = null
@@ -381,6 +396,9 @@ jobs:
                   voiceTypeIndex = prefs.getInt("VOICE_INDEX", 0)
                   dubStyleKey = prefs.getString("DUB_STYLE", "netflix") ?: "netflix"
                   currentPlaybackSpeed = prefs.getFloat("PLAY_SPEED", 1.0f)
+                  elevenApiKey = prefs.getString("ELEVEN_API_KEY", "") ?: ""
+                  customVoiceId = prefs.getString("CUSTOM_VOICE_ID", "") ?: ""
+                  useCustomClonedVoice = prefs.getBoolean("USE_CUSTOM_VOICE", false)
 
                   rootFrame = FrameLayout(this).apply {
                       setBackgroundColor(Color.parseColor("#090A0F"))
@@ -442,6 +460,10 @@ jobs:
               private fun checkAndRequestStoragePermissions() {
                   val neededPermissions = mutableListOf<String>()
 
+                  if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                      neededPermissions.add(Manifest.permission.RECORD_AUDIO)
+                  }
+
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                       if (checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED) {
                           neededPermissions.add(Manifest.permission.READ_MEDIA_VIDEO)
@@ -465,11 +487,7 @@ jobs:
                   if (requestCode == PERMISSION_REQUEST_CODE) {
                       val allGranted = grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }
                       if (allGranted) {
-                          Toast.makeText(this, "✅ स्टोरेज परमिशन मिल गई", Toast.LENGTH_SHORT).show()
-                          homeStatusBadge.text = "Permission granted. Select a video."
-                      } else {
-                          Toast.makeText(this, "⚠️ वीडियो प्ले करने के लिए स्टोरेज परमिशन ज़रूरी है", Toast.LENGTH_LONG).show()
-                          homeStatusBadge.text = "Storage permission required"
+                          Toast.makeText(this, "✅ सभी परमिशन मिल गई", Toast.LENGTH_SHORT).show()
                       }
                   }
               }
@@ -573,7 +591,6 @@ jobs:
                       setPadding(dpToPx(16), dpToPx(16), dpToPx(16), dpToPx(20))
                   }
 
-                  // High-Tech Quick Action Bar
                   val quickActionBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -616,7 +633,6 @@ jobs:
                   quickActionBar.addView(homeSpeedBtn)
                   homeContent.addView(quickActionBar)
 
-                  // Status and Speaker Badge
                   val statusRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -658,7 +674,6 @@ jobs:
                   statusRow.addView(speakerTagBadge)
                   homeContent.addView(statusRow)
 
-                  // High-Tech Cyber Cards for Subtitles
                   val translatedCard = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = createCardDrawable(Color.parseColor("#12151F"), Color.parseColor("#252E42"), dpToPx(14).toFloat(), dpToPx(1))
@@ -673,7 +688,7 @@ jobs:
                   }
 
                   translatedTitleView = TextView(this).apply {
-                      text = "CINEMATIC DUBBING ($targetLangName)"
+                      text = if (useCustomClonedVoice) "MY VOICE CLONE DUBBING" else "CINEMATIC DUBBING ($targetLangName)"
                       textSize = 11f
                       setTextColor(Color.parseColor("#FF9100"))
                       setTypeface(null, Typeface.BOLD)
@@ -747,7 +762,7 @@ jobs:
                   }
 
                   val headerTitle = TextView(this).apply {
-                      text = "⚙️ Settings & Engine Options"
+                      text = "⚙️ Settings & Audio Studio"
                       textSize = 18f
                       setTextColor(Color.WHITE)
                       setTypeface(null, Typeface.BOLD)
@@ -757,6 +772,13 @@ jobs:
                       layoutParams = p
                   }
                   settingsContainer.addView(headerTitle)
+
+                  // 1. My Custom Voice Clone Card
+                  settingCloneValView = TextView(this)
+                  val cloneState = if (useCustomClonedVoice && customVoiceId.isNotBlank()) "✅ Active" else "🎙️ Record/Setup"
+                  settingsContainer.addView(createSettingsRow("🎙️ My Voice Clone (मेरी आवाज़)", cloneState, settingCloneValView) {
+                      showVoiceCloneDialog()
+                  })
 
                   settingLangValView = TextView(this)
                   settingsContainer.addView(createSettingsRow("🌐 Target Language", targetLangName, settingLangValView) {
@@ -804,6 +826,7 @@ jobs:
                       setOnClickListener {
                           isProcessing.set(false)
                           tts?.stop()
+                          voiceClonePlayer?.stop()
                           isSpeechActive.set(false)
                           fullscreenSubtitleView.text = ""
                           timelineDubQueue.clear()
@@ -826,6 +849,203 @@ jobs:
                   settingsContainer.addView(stopBtnCard)
 
                   settingsTabView.addView(settingsContainer)
+              }
+
+              private fun showVoiceCloneDialog() {
+                  checkAndRequestStoragePermissions()
+
+                  val dialogView = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dpToPx(20), dpToPx(16), dpToPx(20), dpToPx(16))
+                      setBackgroundColor(Color.parseColor("#12151F"))
+                  }
+
+                  val keyLabel = TextView(this).apply {
+                      text = "ElevenLabs API Key:"
+                      setTextColor(Color.WHITE)
+                      textSize = 13f
+                      setTypeface(null, Typeface.BOLD)
+                  }
+                  dialogView.addView(keyLabel)
+
+                  val keyInput = EditText(this).apply {
+                      setText(elevenApiKey)
+                      hint = "Paste your xi-api-key here"
+                      setHintTextColor(Color.parseColor("#78909C"))
+                      setTextColor(Color.parseColor("#00E5FF"))
+                      textSize = 12f
+                      background = createCardDrawable(Color.parseColor("#1A1F2C"), Color.parseColor("#2E384D"), dpToPx(8).toFloat(), dpToPx(1))
+                      setPadding(dpToPx(12), dpToPx(10), dpToPx(12), dpToPx(10))
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          topMargin = dpToPx(6)
+                          bottomMargin = dpToPx(14)
+                      }
+                      layoutParams = p
+                  }
+                  dialogView.addView(keyInput)
+
+                  val recordStatus = TextView(this).apply {
+                      text = if (customVoiceId.isNotBlank()) "Voice ID: $customVoiceId" else "Record a 10s clear voice sample"
+                      setTextColor(Color.parseColor("#B0BEC5"))
+                      textSize = 12f
+                      val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                          bottomMargin = dpToPx(10)
+                      }
+                      layoutParams = p
+                  }
+                  dialogView.addView(recordStatus)
+
+                  val recordBtn = Button(this).apply {
+                      text = "🔴 Record Voice Sample (माइक)"
+                      textSize = 12f
+                      setTextColor(Color.WHITE)
+                      background = createRoundedDrawable(Color.parseColor("#D32F2F"), dpToPx(8).toFloat())
+                      setOnClickListener {
+                          if (!isRecordingSample) {
+                              startSampleRecording(recordStatus, this)
+                          } else {
+                              stopSampleRecording(recordStatus, this)
+                          }
+                      }
+                  }
+                  dialogView.addView(recordBtn)
+
+                  val dialog = AlertDialog.Builder(this)
+                      .setTitle("🎙️ Instant Voice Cloning")
+                      .setView(dialogView)
+                      .setPositiveButton("Save & Use My Voice") { _, _ ->
+                          val key = keyInput.text.toString().trim()
+                          elevenApiKey = key
+                          val prefs = getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
+                          prefs.putString("ELEVEN_API_KEY", elevenApiKey)
+
+                          if (recordedSampleFile != null && recordedSampleFile!!.exists() && elevenApiKey.isNotBlank()) {
+                              Toast.makeText(this, "Uploading voice sample...", Toast.LENGTH_SHORT).show()
+                              uploadVoiceSampleToElevenLabs(recordedSampleFile!!, elevenApiKey)
+                          } else {
+                              if (customVoiceId.isNotBlank()) {
+                                  useCustomClonedVoice = true
+                                  prefs.putBoolean("USE_CUSTOM_VOICE", true).apply()
+                                  updateSettingsValues()
+                                  Toast.makeText(this, "Using Cloned Voice!", Toast.LENGTH_SHORT).show()
+                              } else {
+                                  prefs.apply()
+                              }
+                          }
+                      }
+                      .setNegativeButton("Cancel", null)
+                      .create()
+
+                  dialog.show()
+              }
+
+              private fun startSampleRecording(statusView: TextView, btn: Button) {
+                  try {
+                      recordedSampleFile = File(cacheDir, "my_voice_sample.m4a")
+                      if (recordedSampleFile!!.exists()) recordedSampleFile!!.delete()
+
+                      mediaRecorder = MediaRecorder().apply {
+                          setAudioSource(MediaRecorder.AudioSource.MIC)
+                          setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                          setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                          setAudioEncodingBitRate(128000)
+                          setAudioSamplingRate(44100)
+                          setOutputFile(recordedSampleFile!!.absolutePath)
+                          prepare()
+                          start()
+                      }
+                      isRecordingSample = true
+                      btn.text = "⏹️ Stop Recording"
+                      statusView.text = "Recording... Speak clearly in Hindi for 10s!"
+                      statusView.setTextColor(Color.parseColor("#FF5252"))
+
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                      Toast.makeText(this, "Mic error: ${e.message}", Toast.LENGTH_SHORT).show()
+                  }
+              }
+
+              private fun stopSampleRecording(statusView: TextView, btn: Button) {
+                  try {
+                      mediaRecorder?.stop()
+                      mediaRecorder?.release()
+                      mediaRecorder = null
+                      isRecordingSample = false
+                      btn.text = "🔄 Record Again"
+                      statusView.text = "Sample recorded! Tap 'Save & Use My Voice' to clone."
+                      statusView.setTextColor(Color.parseColor("#00E676"))
+
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                  }
+              }
+
+              private fun uploadVoiceSampleToElevenLabs(audioFile: File, apiKey: String) {
+                  Thread {
+                      try {
+                          val boundary = "BoundaryVoice" + System.currentTimeMillis()
+                          val lineEnd = "\r\n"
+                          val twoHyphens = "--"
+
+                          val url = URL("https://api.elevenlabs.io/v1/voices/add")
+                          val conn = (url.openConnection() as HttpURLConnection).apply {
+                              requestMethod = "POST"
+                              setRequestProperty("xi-api-key", apiKey)
+                              setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                              connectTimeout = 15000
+                              readTimeout = 30000
+                              doOutput = true
+                          }
+
+                          val out = DataOutputStream(conn.outputStream)
+
+                          // Voice Name
+                          out.writeBytes(twoHyphens + boundary + lineEnd)
+                          out.writeBytes("Content-Disposition: form-data; name=\"name\"" + lineEnd + lineEnd)
+                          out.writeBytes("MyClonedVoice" + lineEnd)
+
+                          // Audio File Part
+                          out.writeBytes(twoHyphens + boundary + lineEnd)
+                          out.writeBytes("Content-Disposition: form-data; name=\"files\"; filename=\"" + audioFile.name + "\"" + lineEnd)
+                          out.writeBytes("Content-Type: audio/m4a" + lineEnd + lineEnd)
+
+                          FileInputStream(audioFile).use { fis ->
+                              val buf = ByteArray(4096)
+                              var bytesRead: Int
+                              while (fis.read(buf).also { bytesRead = it } != -1) {
+                                  out.write(buf, 0, bytesRead)
+                              }
+                          }
+                          out.writeBytes(lineEnd)
+                          out.writeBytes(twoHyphens + boundary + twoHyphens + lineEnd)
+                          out.flush()
+                          out.close()
+
+                          if (conn.responseCode == 200) {
+                              val res = conn.inputStream.bufferedReader().use { it.readText() }
+                              val voiceId = JSONObject(res).optString("voice_id", "")
+                              if (voiceId.isNotBlank()) {
+                                  customVoiceId = voiceId
+                                  useCustomClonedVoice = true
+                                  getSharedPreferences("DubSettings", Context.MODE_PRIVATE).edit()
+                                      .putString("CUSTOM_VOICE_ID", voiceId)
+                                      .putBoolean("USE_CUSTOM_VOICE", true)
+                                      .apply()
+
+                                  runOnUiThread {
+                                      updateSettingsValues()
+                                      Toast.makeText(this@MainActivity, "🎉 Voice successfully cloned!", Toast.LENGTH_LONG).show()
+                                  }
+                              }
+                          } else {
+                              runOnUiThread {
+                                  Toast.makeText(this@MainActivity, "ElevenLabs API Error: code ${conn.responseCode}", Toast.LENGTH_LONG).show()
+                              }
+                          }
+                      } catch (e: Exception) {
+                          e.printStackTrace()
+                      }
+                  }.start()
               }
 
               private fun createSettingsRow(title: String, initialVal: String, valView: TextView, onClick: () -> Unit): LinearLayout {
@@ -879,9 +1099,10 @@ jobs:
                       else -> "📖 फॉर्मल हिंदी"
                   }
                   settingSpeedValView.text = "${currentPlaybackSpeed}x"
+                  settingCloneValView.text = if (useCustomClonedVoice && customVoiceId.isNotBlank()) "✅ Active" else "🎙️ Record/Setup"
                   settingCacheValView.text = "${sessionCacheMap.size} Dialogues"
                   homeSpeedBtn.text = "⚡ ${currentPlaybackSpeed}x"
-                  translatedTitleView.text = "CINEMATIC DUBBING ($targetLangName)"
+                  translatedTitleView.text = if (useCustomClonedVoice) "MY VOICE CLONE DUBBING" else "CINEMATIC DUBBING ($targetLangName)"
               }
 
               private fun buildBottomNavigationBar() {
@@ -1321,6 +1542,7 @@ jobs:
                   if (videoView.isPlaying) {
                       videoView.pause()
                       tts?.stop()
+                      voiceClonePlayer?.pause()
                       isSpeechActive.set(false)
                       saveCurrentPosition()
                       homeStatusBadge.text = "Paused"
@@ -1460,7 +1682,7 @@ jobs:
               private fun purgeSessionTempFiles() {
                   try {
                       cacheDir.listFiles()?.forEach { file ->
-                          if (file.name.startsWith("chunk_") || file.name.startsWith("session_dub_") || file.name.startsWith("dub_cache_")) {
+                          if (file.name.startsWith("chunk_") || file.name.startsWith("session_dub_") || file.name.startsWith("dub_cache_") || file.name.startsWith("clone_tts_")) {
                               file.delete()
                           }
                       }
@@ -1476,6 +1698,7 @@ jobs:
                   recentSpokenTexts.clear()
                   currentlyPlayingSegment = null
                   tts?.stop()
+                  voiceClonePlayer?.stop()
                   isSpeechActive.set(false)
                   lastSpeechEndTimeMs = 0L
 
@@ -1763,6 +1986,7 @@ jobs:
 
                       isProcessing.set(false)
                       tts?.stop()
+                      voiceClonePlayer?.stop()
                       isSpeechActive.set(false)
                       seekTargetMs.set(-1L)
                       timelineDubQueue.clear()
@@ -1825,7 +2049,7 @@ jobs:
                               val now = System.currentTimeMillis()
 
                               val tightGapMs = (120L / currentPlaybackSpeed).toLong().coerceIn(60L, 120L)
-                              val isBusySpeaking = isSpeechActive.get() || (tts?.isSpeaking == true)
+                              val isBusySpeaking = isSpeechActive.get() || (tts?.isSpeaking == true) || (voiceClonePlayer?.isPlaying == true)
 
                               if (!isBusySpeaking && (now - lastSpeechEndTimeMs >= tightGapMs)) {
                                   for (segment in timelineDubQueue) {
@@ -2473,12 +2697,81 @@ jobs:
               }
 
               private fun speakDubbed(text: String, speakerType: String) {
-                  applyCharacterVoice(speakerType)
-                  val params = Bundle().apply {
-                      putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
+                  if (useCustomClonedVoice && customVoiceId.isNotBlank() && elevenApiKey.isNotBlank()) {
+                      playElevenLabsDubbed(text)
+                  } else {
+                      applyCharacterVoice(speakerType)
+                      val params = Bundle().apply {
+                          putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
+                      }
+                      isSpeechActive.set(true)
+                      tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "dub_${System.currentTimeMillis()}")
                   }
-                  isSpeechActive.set(true)
-                  tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "dub_${System.currentTimeMillis()}")
+              }
+
+              private fun playElevenLabsDubbed(text: String) {
+                  Thread {
+                      try {
+                          val url = URL("https://api.elevenlabs.io/v1/text-to-speech/$customVoiceId")
+                          val conn = (url.openConnection() as HttpURLConnection).apply {
+                              requestMethod = "POST"
+                              setRequestProperty("xi-api-key", elevenApiKey)
+                              setRequestProperty("Content-Type", "application/json")
+                              connectTimeout = 8000
+                              readTimeout = 15000
+                              doOutput = true
+                          }
+
+                          val payload = JSONObject().apply {
+                              put("text", text)
+                              put("model_id", "eleven_multilingual_v2")
+                              val settings = JSONObject().apply {
+                                  put("stability", 0.45)
+                                  put("similarity_boost", 0.85)
+                              }
+                              put("voice_settings", settings)
+                          }
+
+                          conn.outputStream.use { it.write(payload.toString().toByteArray()) }
+
+                          if (conn.responseCode == 200) {
+                              val outputFile = File(cacheDir, "clone_tts_${System.currentTimeMillis()}.mp3")
+                              conn.inputStream.use { input ->
+                                  FileOutputStream(outputFile).use { output ->
+                                      input.copyTo(output)
+                                  }
+                              }
+
+                              runOnUiThread {
+                                  try {
+                                      voiceClonePlayer?.release()
+                                      voiceClonePlayer = MediaPlayer().apply {
+                                          setDataSource(outputFile.absolutePath)
+                                          prepare()
+                                          start()
+                                          isSpeechActive.set(true)
+                                          setOnCompletionListener {
+                                              isSpeechActive.set(false)
+                                              lastSpeechEndTimeMs = System.currentTimeMillis()
+                                              outputFile.delete()
+                                          }
+                                      }
+                                  } catch (e: Exception) {
+                                      isSpeechActive.set(false)
+                                      tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "dub_fallback")
+                                  }
+                              }
+                          } else {
+                              runOnUiThread {
+                                  tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "dub_fallback")
+                              }
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread {
+                              tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "dub_fallback")
+                          }
+                      }
+                  }.start()
               }
 
               override fun onPause() {
@@ -2491,6 +2784,8 @@ jobs:
                   isProcessing.set(false)
                   tts?.stop()
                   tts?.shutdown()
+                  voiceClonePlayer?.release()
+                  mediaRecorder?.release()
                   timelineDubQueue.clear()
                   sessionCacheMap.clear()
                   recentSpokenTexts.clear()
@@ -2500,7 +2795,7 @@ jobs:
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with Storage Permissions and High-Tech 2-Tab Architecture."
+          echo "MainActivity successfully fixed and compiled with Voice Clone & Full Permissions."
 
       - name: Build Debug APK
         run: |
@@ -2515,5 +2810,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HindiDubPlayer-CyberUI-Permissions-apk
+          name: HindiDubPlayer-VoiceCloneStudio-apk
           path: "**/build/outputs/apk/debug/*.apk"

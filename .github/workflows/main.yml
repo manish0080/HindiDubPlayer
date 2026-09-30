@@ -130,7 +130,7 @@ jobs:
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Complete MainActivity with Dedicated Original Audio Controls
+      - name: Inject Complete Master MainActivity
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
 
@@ -289,8 +289,10 @@ jobs:
               private var lastSpeechEndTimeMs = 0L
               private val isSpeechActive = AtomicBoolean(false)
 
+              // Adaptive Context & Continuous Learning Memory
               private var currentSceneSpeaker = "man"
               private val sceneDialogueHistory = ConcurrentLinkedQueue<String>()
+              private val learnedGlossaryMemory = ConcurrentHashMap<String, String>()
 
               private var targetLangCode = "hi"
               private var targetLangName = "Hindi"
@@ -363,6 +365,8 @@ jobs:
                   voiceTypeIndex = prefs.getInt("VOICE_INDEX", 0)
                   currentPlaybackSpeed = prefs.getFloat("PLAY_SPEED", 1.0f)
                   isDebugLoggingEnabled = prefs.getBoolean("DEBUG_LOG", false)
+
+                  loadPersistentLearnedKnowledge()
 
                   try {
                       tts = TextToSpeech(this, this, "com.google.android.tts")
@@ -458,6 +462,9 @@ jobs:
               }
 
               private fun showScreen(index: Int) {
+                  if (activeTab == 2 && index != 2) {
+                      pausePlaybackAndDubbing()
+                  }
                   activeTab = index
                   viewHome.visibility = if (index == 0) View.VISIBLE else View.GONE
                   viewBrowser.visibility = if (index == 1) View.VISIBLE else View.GONE
@@ -914,7 +921,10 @@ jobs:
                       text = "←"
                       textSize = 22f
                       setTextColor(Color.WHITE)
-                      setOnClickListener { showScreen(0) }
+                      setOnClickListener {
+                          pausePlaybackAndDubbing()
+                          showScreen(0)
+                      }
                   }
                   playerTopBar.addView(backBtn)
 
@@ -997,7 +1007,7 @@ jobs:
 
                   val btnRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER
+                      gravity = Gravity.CENTER_VERTICAL
                       setPadding(0, dpToPx(6), 0, dpToPx(6))
                   }
 
@@ -1088,7 +1098,6 @@ jobs:
                   }
                   audioCard.addView(audioHeader)
 
-                  // 1. Hindi Dub Switch & Slider
                   val rowDub = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -1154,7 +1163,6 @@ jobs:
                   volRowHindi.addView(volumePercentText)
                   audioCard.addView(volRowHindi)
 
-                  // 2. Original Audio Mute Switch & Volume Slider (Default 50%)
                   val rowOrigMute = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -1287,7 +1295,7 @@ jobs:
                       showSpeedDialog()
                   })
 
-                  container.addView(createSectionHeader("ऐप सेटिंग"))
+                  container.addView(createSectionHeader("ऐप सेटिंग एवं लर्निंग"))
                   settingCacheVal = TextView(this)
                   container.addView(createSettingItem("कैश साफ़ करें", "${sessionCacheMap.size} Dialogues ›", settingCacheVal) {
                       sessionCacheMap.clear()
@@ -1296,8 +1304,14 @@ jobs:
                       Toast.makeText(this, "कैश साफ़ कर दिया गया", Toast.LENGTH_SHORT).show()
                   })
 
-                  container.addView(createSettingItem("हमसे संपर्क करें", "हिंदी डब प्लेयर v5.4 ›", TextView(this)) {
-                      Toast.makeText(this, "Hindi Dub Player v5.4 • Dedicated BGM Slider", Toast.LENGTH_LONG).show()
+                  container.addView(createSettingItem("सीखी गई मेमोरी रीसेट करें", "${learnedGlossaryMemory.size} Words Learned ›", TextView(this)) {
+                      learnedGlossaryMemory.clear()
+                      getSharedPreferences("DubKnowledgeBase", Context.MODE_PRIVATE).edit().clear().apply()
+                      Toast.makeText(this, "मेमोरी रीसेट हो गई", Toast.LENGTH_SHORT).show()
+                  })
+
+                  container.addView(createSettingItem("हमसे संपर्क करें", "हिंदी डब प्लेयर v5.5 (Studio Edition) ›", TextView(this)) {
+                      Toast.makeText(this, "Hindi Dub Player v5.5 • Ultra Studio Quality", Toast.LENGTH_LONG).show()
                   })
 
                   viewSettings.addView(container)
@@ -1497,6 +1511,19 @@ jobs:
                   }
               }
 
+              // BULLETPROOF AUDIO & DUBBING PAUSE (Fixes background audio playing when exited)
+              private fun pausePlaybackAndDubbing() {
+                  saveCurrentPosition()
+                  if (playerVideoView.isPlaying) {
+                      playerVideoView.pause()
+                  }
+                  tts?.stop()
+                  isSpeechActive.set(false)
+                  isProcessing.set(false)
+                  mediaPlayerRef?.setVolume(0f, 0f)
+                  playerPlayPauseBtn.text = "▶"
+              }
+
               private fun showTargetLanguageDialog() {
                   val names = availableLanguages.map { it.first }.toTypedArray()
                   AlertDialog.Builder(this)
@@ -1683,10 +1710,7 @@ jobs:
                   }
               }
 
-              // SMART ORIGINAL AUDIO CONTROLS:
-              // 1. If mute toggle is ON -> complete 0.0f silence
-              // 2. If dialogue speaks -> duck to 8% (0.08f) so English words are suppressed
-              // 3. When dialogue stops -> plays BGM at slider percentage (e.g. 50% default)
+              // SMART 50% AUTO-DUCKING & INDEPENDENT ORIGINAL VOLUME
               private fun applyAudioMuteState() {
                   if (isOriginalMuted) {
                       mediaPlayerRef?.setVolume(0f, 0f)
@@ -1716,16 +1740,16 @@ jobs:
 
               private fun togglePlayPause() {
                   if (playerVideoView.isPlaying) {
-                      playerVideoView.pause()
-                      tts?.stop()
-                      isSpeechActive.set(false)
-                      saveCurrentPosition()
-                      playerPlayPauseBtn.text = "▶"
+                      pausePlaybackAndDubbing()
                   } else {
+                      isProcessing.set(true)
                       applyAudioMuteState()
                       applyVideoPlaybackSpeed()
                       playerVideoView.start()
                       playerPlayPauseBtn.text = "⏸"
+                      selectedVideoUri?.let { uri ->
+                          Thread { runLookAheadProducer(uri) }.start()
+                      }
                   }
               }
 
@@ -1910,9 +1934,9 @@ jobs:
                               var score = 0
                               val n = v.name.lowercase()
                               if (v.isNetworkConnectionRequired || n.contains("network")) score += 120
-                              if (n.contains("neural2")) score += 90
-                              if (n.contains("wavenet")) score += 70
-                              if (n.contains("x-")) score += 30
+                              if (n.contains("neural2")) score += 100
+                              if (n.contains("wavenet")) score += 80
+                              if (n.contains("x-")) score += 40
                               if (v.quality >= Voice.QUALITY_VERY_HIGH) score += 40
                               else if (v.quality >= Voice.QUALITY_HIGH) score += 20
                               score
@@ -1943,13 +1967,13 @@ jobs:
                   val isFemale = effectiveRole == "woman" || effectiveRole == "girl"
                   if (isFemale) {
                       if (cachedFemaleVoice != null) tts?.voice = cachedFemaleVoice
-                      tts?.setPitch(1.22f)
+                      tts?.setPitch(1.18f) // Clear, realistic female pitch
                   } else {
                       if (cachedMaleVoice != null) tts?.voice = cachedMaleVoice
-                      tts?.setPitch(0.88f)
+                      tts?.setPitch(0.88f) // Resonant, deep male cinema voice
                   }
 
-                  tts?.setSpeechRate(1.05f * currentPlaybackSpeed)
+                  tts?.setSpeechRate(1.02f * currentPlaybackSpeed)
               }
 
               private fun speakDubbed(text: String, speakerType: String) {
@@ -1980,6 +2004,29 @@ jobs:
                   return res.replace(Regex("\\s+"), " ").trim()
               }
 
+              private fun loadPersistentLearnedKnowledge() {
+                  try {
+                      val prefs = getSharedPreferences("DubKnowledgeBase", Context.MODE_PRIVATE)
+                      val map = prefs.all
+                      for ((k, v) in map) {
+                          if (v is String) learnedGlossaryMemory[k] = v
+                      }
+                  } catch (_: Exception) {}
+              }
+
+              private fun saveLearnedWord(englishPhrase: String, hindiTranslation: String) {
+                  try {
+                      val cleanEn = englishPhrase.trim().lowercase()
+                      if (cleanEn.length in 3..25 && !learnedGlossaryMemory.containsKey(cleanEn)) {
+                          learnedGlossaryMemory[cleanEn] = hindiTranslation.trim()
+                          getSharedPreferences("DubKnowledgeBase", Context.MODE_PRIVATE)
+                              .edit()
+                              .putString(cleanEn, hindiTranslation.trim())
+                              .apply()
+                      }
+                  } catch (_: Exception) {}
+              }
+
               private fun translateBatch(texts: List<String>, targetLang: String, style: String, apiKey: String): List<Pair<String, String>> {
                   if (texts.isEmpty()) return emptyList()
 
@@ -1987,29 +2034,35 @@ jobs:
                   texts.forEach { jsonArr.put(it) }
 
                   val historyLog = if (sceneDialogueHistory.isNotEmpty()) {
-                      "RECENT SCENE CONTEXT:\n" + sceneDialogueHistory.joinToString("\n")
+                      "RECENT SCENE DIALOGUE HISTORY:\n" + sceneDialogueHistory.joinToString("\n")
                   } else {
-                      "Scene start."
+                      "Scene beginning."
+                  }
+
+                  val topLearnedMemory = if (learnedGlossaryMemory.isNotEmpty()) {
+                      "LEARNED USER VOCABULARY & IDIOMS (From your watched movies):\n" +
+                      learnedGlossaryMemory.entries.take(15).joinToString("\n") { "${it.key} => ${it.value}" }
+                  } else {
+                      ""
                   }
 
                   val systemPrompt = """
-                  You are an expert Hollywood/Netflix film dubbing director for Indian audiences.
-                  Translate English dialogues into authentic, natural everyday Indian conversational Hinglish/Hindi in Devanagari script.
+                  You are an elite Indian cinematic dialogue writer and Netflix dubbing director.
+                  Translate English movie dialogues into authentic, natural conversational Indian Hinglish/Hindi in Devanagari script.
                   
-                  STRICT SPEAKER CONTINUITY AND GENDER ANCHOR RULES:
-                  1. MALE AS DEFAULT PROTAGONIST: In movie dialogue streams, 80%+ action and conversation sequences belong to the leading actor. Default speaker is 'man'.
-                  2. DO NOT FLIP-FLOP GENDER: Once a character speaks, do not switch between man and woman on every short sentence. Maintain speaker continuity!
-                  3. SHORT LINE RULE: Short conversational lines ('Yes', 'No', 'Wait', 'Look at me', 'Let's go', 'Are you ready?', 'Come on', 'Take cover', 'Understood') ALWAYS belong to the current active speaker. NEVER randomly flip short lines to 'woman'!
-                  4. STRICT CRITERIA FOR 'woman': ONLY mark as 'woman' if:
-                     - The line is spoken by a distinct female character (addressing someone as 'Honey', 'Dad', 'Handsome', 'Boyfriend', or female family member).
-                     - Or Hindi grammar uses female first-person endings ('करती हूँ', 'जा रही हूँ', 'सोचती हूँ').
-                  5. Current active speaker anchor: '$currentSceneSpeaker'
+                  SPEAKER CONTINUITY & HIGH-FIDELITY RULES:
+                  1. PERSISTENT GENDER LOCK: Default character is 'man'. Do NOT alternate randomly between 'man' and 'woman'.
+                  2. SHORT PHRASES DO NOT SWITCH GENDER: Short expressions ('Wait', 'Let's go', 'Watch out', 'Come on', 'No', 'What is that?', 'Understood') ALWAYS inherit current active speaker!
+                  3. ONLY mark 'woman' if:
+                     - Spoken to with female markers ('Mom', 'Ma'am', 'Sister', 'Sweetheart')
+                     - Or Hindi first-person feminine verb endings are used ('कर रही हूँ', 'सोचती हूँ').
+                  4. Current Active Speaker: '$currentSceneSpeaker'
                   
                   $historyLog
+                  $topLearnedMemory
                   
                   Output ONLY a valid JSON array of objects:
-                     [{"text": "अनुवादित संवाद", "speaker": "man"}]
-                  No explanation, pure JSON only.
+                     [{"text": "रूपांतरित संवाद", "speaker": "man"}]
                   """.trimIndent()
 
                   val modelsToTry = mutableListOf<String>()
@@ -2064,7 +2117,9 @@ jobs:
 
                                       currentSceneSpeaker = spk
                                       sceneDialogueHistory.add("[$spk] $raw -> $transText")
-                                      while (sceneDialogueHistory.size > 5) sceneDialogueHistory.poll()
+                                      while (sceneDialogueHistory.size > 6) sceneDialogueHistory.poll()
+                                      
+                                      saveLearnedWord(raw, transText)
                                       result.add(transText to spk)
                                   } else {
                                       result.add(arr.getString(i) to "man")
@@ -2432,27 +2487,39 @@ jobs:
                   }
               }
 
+              override fun onPause() {
+                  super.onPause()
+                  pausePlaybackAndDubbing()
+              }
+
+              override fun onStop() {
+                  super.onStop()
+                  pausePlaybackAndDubbing()
+              }
+
               override fun onBackPressed() {
                   if (isFullscreen) {
                       toggleFullscreen()
                   } else if (activeTab != 0) {
+                      if (activeTab == 2) {
+                          pausePlaybackAndDubbing()
+                      }
                       showScreen(0)
                   } else {
+                      pausePlaybackAndDubbing()
                       super.onBackPressed()
                   }
               }
 
               override fun onDestroy() {
-                  saveCurrentPosition()
-                  isProcessing.set(false)
-                  tts?.stop()
+                  pausePlaybackAndDubbing()
                   tts?.shutdown()
                   super.onDestroy()
               }
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully rewritten with dedicated BGM slider and stable build."
+          echo "MainActivity successfully rewritten with background leak fix and smart 50% ducking."
 
       - name: Build Debug APK
         run: |

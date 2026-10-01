@@ -65,20 +65,19 @@ jobs:
             cp icon.png "$RES/mipmap-xxhdpi/ic_launcher.png"
             cp icon.png "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
-            cat > "$RES/mipmap-anydpi-v26/ic_launcher.xml" << 'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@android:color/white" />
-    <foreground android:drawable="@drawable/app_icon" />
-</adaptive-icon>
-EOF
+            echo '<?xml version="1.0" encoding="utf-8"?>' > "$RES/mipmap-anydpi-v26/ic_launcher.xml"
+            echo '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">' >> "$RES/mipmap-anydpi-v26/ic_launcher.xml"
+            echo '    <background android:drawable="@android:color/white" />' >> "$RES/mipmap-anydpi-v26/ic_launcher.xml"
+            echo '    <foreground android:drawable="@drawable/app_icon" />' >> "$RES/mipmap-anydpi-v26/ic_launcher.xml"
+            echo '</adaptive-icon>' >> "$RES/mipmap-anydpi-v26/ic_launcher.xml"
+
             sed -i 's/ android:icon="[^"]*"//g' "$MANIFEST"
             sed -i 's/<application[[:space:]]*/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher" /' "$MANIFEST"
           fi
 
       - name: Robust AndroidManifest, Permissions & Queries Fix
         run: |
-          python3 - << 'PYEOF'
+          python3 -c '
           import glob, re
 
           for path in glob.glob("**/AndroidManifest.xml", recursive=True):
@@ -86,11 +85,11 @@ EOF
                   content = f.read()
 
               permissions = [
-                  '<uses-permission android:name="android.permission.INTERNET" />',
-                  '<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />',
-                  '<uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />',
-                  '<uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />',
-                  '<uses-permission android:name="android.permission.WAKE_LOCK" />'
+                  "<uses-permission android:name=\"android.permission.INTERNET\" />",
+                  "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\" android:maxSdkVersion=\"32\" />",
+                  "<uses-permission android:name=\"android.permission.READ_MEDIA_VIDEO\" />",
+                  "<uses-permission android:name=\"android.permission.READ_MEDIA_AUDIO\" />",
+                  "<uses-permission android:name=\"android.permission.WAKE_LOCK\" />"
               ]
 
               perm_block = "\n    ".join(permissions) + "\n"
@@ -98,27 +97,22 @@ EOF
               content = re.sub(r"(<application\b)", perm_block + r"\1", content)
 
               if "<queries>" not in content:
-                  queries_block = """    <queries>
-                      <intent>
-                          <action android:name="android.intent.action.TTS_SERVICE" />
-                      </intent>
-                      <package android:name="com.google.android.tts" />
-                  </queries>\n"""
+                  queries_block = "    <queries>\n        <intent>\n            <action android:name=\"android.intent.action.TTS_SERVICE\" />\n        </intent>\n        <package android:name=\"com.google.android.tts\" />\n    </queries>\n"
                   content = re.sub(r"(<application\b)", queries_block + r"\1", content)
 
-              content = re.sub(r'\s*android:configChanges="[^"]*"', '', content)
-              content = re.sub(r'<activity(\s+)', r'<activity android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode" \1', content)
+              content = re.sub(r"\s*android:configChanges=\"[^\"]*\"", "", content)
+              content = re.sub(r"<activity(\s+)", r"<activity android:configChanges=\"orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode\" \1", content)
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-          print("AndroidManifest patched successfully.")
-          PYEOF
+          print("AndroidManifest patched.")
+          '
 
           find . -name "build.gradle.kts" -exec sed -i '/kotlin.*android/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Pro MX Player Synchronized Engine
+      - name: Inject Ultra Precision MX Dub Player
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
           if [ -z "$MAIN" ]; then
@@ -168,9 +162,7 @@ EOF
           import android.view.WindowManager
           import android.widget.Button
           import android.widget.FrameLayout
-          import android.widget.GridLayout
           import android.widget.LinearLayout
-          import android.widget.RadioButton
           import android.widget.ScrollView
           import android.widget.SeekBar
           import android.widget.Switch
@@ -186,7 +178,6 @@ EOF
           import java.net.URL
           import java.nio.ByteBuffer
           import java.util.Locale
-          import java.util.concurrent.ConcurrentHashMap
           import java.util.concurrent.ConcurrentLinkedQueue
           import java.util.concurrent.atomic.AtomicBoolean
           import java.util.concurrent.atomic.AtomicLong
@@ -223,7 +214,7 @@ EOF
               private lateinit var homeSelectVideoBtn: Button
               private lateinit var browserListContainer: LinearLayout
 
-              // Pro MX-Style Video Player Components
+              // Pro MX Video Player Components
               private lateinit var playerContainer: FrameLayout
               private lateinit var playerVideoView: VideoView
               private lateinit var overlayControlsLayout: FrameLayout
@@ -238,11 +229,10 @@ EOF
               private lateinit var speedToggleBtn: TextView
               private lateinit var fullscreenToggleBtn: TextView
 
-              // Reference App Teleprompter-Style Transcript Feed
+              // Teleprompter Transcript Feed Components
               private lateinit var scriptFeedScroll: ScrollView
               private lateinit var scriptFeedContainer: LinearLayout
 
-              // Gesture and auto-hide timing
               private val hideControlsHandler = Handler(Looper.getMainLooper())
               private val hideControlsRunnable = Runnable { fadeOutControls() }
               private lateinit var gestureDetector: GestureDetector
@@ -262,8 +252,8 @@ EOF
               private var activeLineIndex = -1
               private val isSpeechActive = AtomicBoolean(false)
 
-              // Translation & Dub Audio Controls (Matching Screenshot 85944.jpg)
-              private var selectedVoiceGender = "man" // "man" or "woman"
+              // Settings
+              private var selectedVoiceGender = "man"
               private var originalVolumeLevel = 0.50f
               private var isSubtitleOnlyMode = false
               private var currentPlaybackSpeed = 1.0f
@@ -598,7 +588,6 @@ EOF
                   return list
               }
 
-              // Build Pro Player & Synchronized Transcript Feed (Exact 85942_2.jpg Match)
               private fun buildPlayerScreen() {
                   viewPlayer = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -607,7 +596,6 @@ EOF
                       visibility = View.GONE
                   }
 
-                  // Top Video Container (Aspect Ratio 16:9 / Fixed Height in portrait)
                   playerContainer = FrameLayout(this).apply {
                       setBackgroundColor(Color.BLACK)
                       layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(240))
@@ -618,7 +606,6 @@ EOF
                   }
                   playerContainer.addView(playerVideoView)
 
-                  // Visual Swipe Feedback Badge (Center)
                   gestureFeedbackText = TextView(this).apply {
                       textSize = 15f
                       setTypeface(null, Typeface.BOLD)
@@ -630,13 +617,11 @@ EOF
                   }
                   playerContainer.addView(gestureFeedbackText)
 
-                  // Overlay Controls Layer (MX-Style Tap to Toggle, 3.5s auto-hide)
                   overlayControlsLayout = FrameLayout(this).apply {
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
                       setBackgroundColor(Color.TRANSPARENT)
                   }
 
-                  // Top bar (Back, Title, Translation Settings Button)
                   playerTopBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -664,9 +649,8 @@ EOF
                   }
                   playerTopBar.addView(topTitle)
 
-                  // Settings Button on Player Header (Matches 85944.jpg)
                   val settingsDialogBtn = TextView(this).apply {
-                      text = " ⚙️ डब सेटिंग्स "
+                      text = " ⚙️ अनुवाद सेटिंग्स "
                       textSize = 12f
                       setTextColor(Color.WHITE)
                       background = createRoundedDrawable(Color.parseColor("#33FFFFFF"), dpToPx(12).toFloat())
@@ -676,7 +660,6 @@ EOF
                   playerTopBar.addView(settingsDialogBtn)
                   overlayControlsLayout.addView(playerTopBar)
 
-                  // Center Play/Pause Indicator Button
                   playerPlayPauseCenterBtn = TextView(this).apply {
                       text = "⏸"
                       textSize = 28f
@@ -691,7 +674,6 @@ EOF
                   }
                   overlayControlsLayout.addView(playerPlayPauseCenterBtn)
 
-                  // Bottom Controls (SeekBar, Time, 1x Speed, Fullscreen)
                   controlBottomSection = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setPadding(dpToPx(14), dpToPx(4), dpToPx(14), dpToPx(6))
@@ -745,7 +727,6 @@ EOF
                   playerContainer.addView(overlayControlsLayout)
                   viewPlayer.addView(playerContainer)
 
-                  // Synchronized Dialogue Feed (Matching Reference Image 85942_2.jpg)
                   scriptFeedScroll = ScrollView(this).apply {
                       layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
                       isFillViewport = true
@@ -759,7 +740,6 @@ EOF
                   viewPlayer.addView(scriptFeedScroll)
               }
 
-              // Translation Settings Dialog (Matches 85944.jpg)
               private fun showTranslationSettingsBottomSheet() {
                   val builder = AlertDialog.Builder(this)
                   val dialogView = LinearLayout(this).apply {
@@ -777,7 +757,6 @@ EOF
                   }
                   dialogView.addView(heading)
 
-                  // 1. Dubbing Voice Gender Toggle (♀ स्त्री / ♂ पुरुष)
                   val voiceTitle = TextView(this).apply {
                       text = "डबिंग की आवाज़\nआपका चुनाव हर भाषा के लिए सेव रहता है।"
                       textSize = 12f
@@ -838,7 +817,6 @@ EOF
                   genderRow.addView(maleBtn)
                   dialogView.addView(genderRow)
 
-                  // 2. Original Volume Slider (Matches 85944.jpg)
                   val origVolTitle = TextView(this).apply {
                       text = "ओरिजिनल का वॉल्यूम\nओरिजिनल ट्रैक डबिंग के नीचे कितना सुनाई दे: पूरी चुप्पी से लेकर साफ़ बैकग्राउंड तक।"
                       textSize = 12f
@@ -867,7 +845,6 @@ EOF
                   }
                   dialogView.addView(origVolBar)
 
-                  // 3. Subtitles-Only Toggle
                   val subOnlyRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -898,7 +875,6 @@ EOF
                   builder.show()
               }
 
-              // MX/VLC Gestures: Swipe horizontally to seek, Double tap to play/pause, Single tap to show controls
               private fun setupGestureHandling() {
                   gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
                       override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
@@ -1087,7 +1063,7 @@ EOF
                   isSeeking.set(false)
               }
 
-              // Precise Millisecond Synchronizer (Matches Reference Video 85943_2.mp4)
+              // Precise Progress Watcher (Runs every 30ms for zero delay)
               private fun startPlaybackProgressWatcher() {
                   uiHandler.postDelayed(object : Runnable {
                       override fun run() {
@@ -1105,7 +1081,7 @@ EOF
                                               activeLineIndex = i
                                               if (!line.isSpoken && !isSubtitleOnlyMode) {
                                                   line.isSpoken = true
-                                                  speakDubbed(line.translatedText, line.speakerType)
+                                                  speakDubbed(line.translatedText, line.speakerType, line.endMs - line.startMs)
                                               }
                                           }
                                           break
@@ -1113,12 +1089,11 @@ EOF
                                   }
                               }
                           }
-                          uiHandler.postDelayed(this, 80)
+                          uiHandler.postDelayed(this, 30)
                       }
-                  }, 80)
+                  }, 30)
               }
 
-              // Highlights spoken dialogue in bold black and dims surrounding dialogue (Matches 85942_2.jpg)
               private fun updateHighlightedTranscript(activeIndex: Int) {
                   for (i in transcriptLines.indices) {
                       val item = transcriptLines[i]
@@ -1185,18 +1160,8 @@ EOF
                   playerPlayPauseCenterBtn.text = "▶"
               }
 
-              private fun speakDubbed(text: String, speakerType: String) {
-                  applyCharacterVoice(speakerType)
-                  val params = Bundle().apply {
-                      putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
-                      putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
-                  }
-                  isSpeechActive.set(true)
-                  applyAudioMuteState()
-                  tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "dub_${System.currentTimeMillis()}")
-              }
-
-              private fun applyCharacterVoice(speakerType: String) {
+              // Dynamic Speech Rate Matching (Prevents dialogue from lagging behind)
+              private fun speakDubbed(text: String, speakerType: String, availableDurationMs: Long) {
                   val effectiveRole = if (selectedVoiceGender == "man") "man" else "woman"
                   val isFemale = effectiveRole == "woman"
                   if (isFemale) {
@@ -1206,7 +1171,20 @@ EOF
                       if (cachedMaleVoice != null) tts?.voice = cachedMaleVoice
                       tts?.setPitch(0.88f)
                   }
-                  tts?.setSpeechRate(1.05f * currentPlaybackSpeed)
+
+                  val wordCount = text.trim().split(Regex("\\s+")).size
+                  val availableSec = (availableDurationMs / 1000f).coerceAtLeast(1.0f)
+                  val naturalPps = 2.4f
+                  val targetSpeed = ((wordCount / (availableSec * naturalPps))).coerceIn(0.95f, 1.45f)
+                  tts?.setSpeechRate(targetSpeed * currentPlaybackSpeed)
+
+                  val params = Bundle().apply {
+                      putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
+                      putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+                  }
+                  isSpeechActive.set(true)
+                  applyAudioMuteState()
+                  tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "dub_${System.currentTimeMillis()}")
               }
 
               private fun resolveStudioVoices() {
@@ -1313,10 +1291,10 @@ EOF
                   You are a Netflix Indian dubbing director.
                   Translate movie dialogue into natural everyday spoken Indian Hinglish in Devanagari script.
                   
-                  RULES:
-                  1. Keep common English conversational words naturally in Devanagari ('सुपरमैन', 'कमांडर', 'अटैक', 'बैरिकेड', 'प्लान', 'वेट', 'प्रॉब्लम', 'ओके').
+                  CRITICAL RULES:
+                  1. Keep conversational English words naturally in Devanagari ('सुपरमैन', 'कमांडर', 'अटैक', 'बैरिकेड', 'प्लान', 'वेट', 'प्रॉब्लम', 'ओके').
                   2. Default speaker is '$selectedVoiceGender'.
-                  3. Keep dialogues punchy, natural, and authentic to Indian conversational speech.
+                  3. Deliver punchy, natural, conversational lines suitable for audio dubbing.
                   
                   Output strictly a JSON array of objects:
                      [{"text": "रूपांतरित संवाद", "speaker": "man"}]
@@ -1491,7 +1469,6 @@ EOF
                   if (initStatus == TextToSpeech.SUCCESS) {
                       tts?.setLanguage(Locale("hi", "IN"))
                       resolveStudioVoices()
-                      applyCharacterVoice(selectedVoiceGender)
 
                       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                           val attrs = AudioAttributes.Builder()
@@ -1575,7 +1552,7 @@ EOF
           }
           EOF
           sed -i "s/PACKAGE_NAME/$PACKAGE/" "$MAIN"
-          echo "MainActivity successfully updated with Pro Synchronized Player."
+          echo "MainActivity successfully rewritten."
 
       - name: Build Debug APK
         run: |

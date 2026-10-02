@@ -42,14 +42,12 @@ jobs:
         run: |
           PROJECT_ROOT=$(find . -name "settings.gradle*" -exec dirname {} \; | head -1)
           if [ -z "$PROJECT_ROOT" ]; then
-            echo "ERROR: Android project not found"
-            exit 1
+            PROJECT_ROOT="."
           fi
 
           RES=$(find "$PROJECT_ROOT" -type d -path '*/src/main/res' | head -1)
-          MANIFEST=$(find "$PROJECT_ROOT" -name "AndroidManifest.xml" | head -1)
 
-          if [ -f "icon.png" ] && [ -n "$RES" ] && [ -n "$MANIFEST" ]; then
+          if [ -f "icon.png" ] && [ -n "$RES" ]; then
             mkdir -p "$RES/drawable-nodpi"
             mkdir -p "$RES/mipmap-mdpi"
             mkdir -p "$RES/mipmap-hdpi"
@@ -70,49 +68,62 @@ jobs:
             echo '    <background android:drawable="@android:color/white" />' >> "$RES/mipmap-anydpi-v26/ic_launcher.xml"
             echo '    <foreground android:drawable="@drawable/app_icon" />' >> "$RES/mipmap-anydpi-v26/ic_launcher.xml"
             echo '</adaptive-icon>' >> "$RES/mipmap-anydpi-v26/ic_launcher.xml"
-
-            sed -i 's/ android:icon="[^"]*"//g' "$MANIFEST"
-            sed -i 's/<application[[:space:]]*/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher" /' "$MANIFEST"
           fi
 
-      - name: Robust AndroidManifest, Permissions & Queries Fix
+      - name: Clean and Bulletproof AndroidManifest Fix
         run: |
-          python3 -c '
+          cat << 'PYEOF' > patch_manifest.py
           import glob, re
 
           for path in glob.glob("**/AndroidManifest.xml", recursive=True):
+              if "build" in path:
+                  continue
+
               with open(path, "r", encoding="utf-8") as f:
                   content = f.read()
 
-              permissions = [
-                  "<uses-permission android:name=\"android.permission.INTERNET\" />",
-                  "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\" android:maxSdkVersion=\"32\" />",
-                  "<uses-permission android:name=\"android.permission.READ_MEDIA_VIDEO\" />",
-                  "<uses-permission android:name=\"android.permission.READ_MEDIA_AUDIO\" />",
-                  "<uses-permission android:name=\"android.permission.WAKE_LOCK\" />"
-              ]
+              content = content.replace(r'\"', '"')
+              content = re.sub(r'<uses-permission[^>]*/>\s*', '', content)
+              content = re.sub(r'<queries>[\s\S]*?</queries>\s*', '', content)
 
-              perm_block = "\n    ".join(permissions) + "\n"
-              content = re.sub(r"(<uses-permission[^>]*>\s*)+", "", content)
-              content = re.sub(r"(<application\b)", perm_block + r"\1", content)
+              perms_and_queries = """
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-              if "<queries>" not in content:
-                  queries_block = "    <queries>\n        <intent>\n            <action android:name=\"android.intent.action.TTS_SERVICE\" />\n        </intent>\n        <package android:name=\"com.google.android.tts\" />\n    </queries>\n"
-                  content = re.sub(r"(<application\b)", queries_block + r"\1", content)
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <package android:name="com.google.android.tts" />
+    </queries>
+"""
+              manifest_match = re.search(r'<manifest[^>]*>', content)
+              if manifest_match:
+                  idx = manifest_match.end()
+                  content = content[:idx] + perms_and_queries + content[idx:]
 
-              content = re.sub(r"\s*android:configChanges=\"[^\"]*\"", "", content)
-              content = re.sub(r"<activity(\s+)", r"<activity android:configChanges=\"orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode\" \1", content)
+              content = re.sub(r'\s*android:icon="[^"]*"', '', content)
+              content = re.sub(r'\s*android:roundIcon="[^"]*"', '', content)
+              content = re.sub(r'<application\b', '<application android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"', content)
+
+              content = re.sub(r'\s*android:configChanges="[^"]*"', '', content)
+              content = re.sub(r'<activity\b', '<activity android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"', content)
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-          print("AndroidManifest patched.")
-          '
+              print("Patched valid manifest:", path)
+          PYEOF
+          python3 patch_manifest.py
+          rm patch_manifest.py
 
           find . -name "build.gradle.kts" -exec sed -i '/kotlin.*android/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i '/kotlinOptions {/,/}/d' {} + || true
           find . -name "build.gradle.kts" -exec sed -i 's/compose = true/compose = false/g' {} + || true
 
-      - name: Inject Ultra Precision MX Dub Player
+      - name: Inject Pro MX Dub Player
         run: |
           MAIN=$(find . -name "MainActivity.kt" | head -1)
           if [ -z "$MAIN" ]; then
@@ -178,7 +189,6 @@ jobs:
           import java.net.URL
           import java.nio.ByteBuffer
           import java.util.Locale
-          import java.util.concurrent.ConcurrentLinkedQueue
           import java.util.concurrent.atomic.AtomicBoolean
           import java.util.concurrent.atomic.AtomicLong
 
@@ -200,6 +210,7 @@ jobs:
               val durationText: String
           )
 
+          @Suppress("DEPRECATION")
           class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
               private val PERMISSION_REQ_CODE = 9999
@@ -214,7 +225,7 @@ jobs:
               private lateinit var homeSelectVideoBtn: Button
               private lateinit var browserListContainer: LinearLayout
 
-              // Pro MX Video Player Components
+              // Pro MX-Style Video Player Components
               private lateinit var playerContainer: FrameLayout
               private lateinit var playerVideoView: VideoView
               private lateinit var overlayControlsLayout: FrameLayout
@@ -1060,10 +1071,14 @@ jobs:
                   tts?.stop()
                   isSpeechActive.set(false)
                   applyAudioMuteState()
+                  for (line in transcriptLines) {
+                      if (line.startMs >= targetPosMs) {
+                          line.isSpoken = false
+                      }
+                  }
                   isSeeking.set(false)
               }
 
-              // Precise Progress Watcher (Runs every 30ms for zero delay)
               private fun startPlaybackProgressWatcher() {
                   uiHandler.postDelayed(object : Runnable {
                       override fun run() {
@@ -1089,9 +1104,9 @@ jobs:
                                   }
                               }
                           }
-                          uiHandler.postDelayed(this, 30)
+                          uiHandler.postDelayed(this, 40)
                       }
-                  }, 30)
+                  }, 40)
               }
 
               private fun updateHighlightedTranscript(activeIndex: Int) {
@@ -1160,8 +1175,7 @@ jobs:
                   playerPlayPauseCenterBtn.text = "▶"
               }
 
-              // Dynamic Speech Rate Matching (Prevents dialogue from lagging behind)
-              private fun speakDubbed(text: String, speakerType: String, availableDurationMs: Long) {
+              private fun speakDubbed(text: String, speakerType: String, availableDurationMs: Long = 2500L) {
                   val effectiveRole = if (selectedVoiceGender == "man") "man" else "woman"
                   val isFemale = effectiveRole == "woman"
                   if (isFemale) {
@@ -1173,9 +1187,9 @@ jobs:
                   }
 
                   val wordCount = text.trim().split(Regex("\\s+")).size
-                  val availableSec = (availableDurationMs / 1000f).coerceAtLeast(1.0f)
-                  val naturalPps = 2.4f
-                  val targetSpeed = ((wordCount / (availableSec * naturalPps))).coerceIn(0.95f, 1.45f)
+                  val availableSec = (availableDurationMs / 1000f).coerceAtLeast(0.8f)
+                  val naturalPps = 2.5f
+                  val targetSpeed = (wordCount / (availableSec * naturalPps)).coerceIn(0.95f, 1.45f)
                   tts?.setSpeechRate(targetSpeed * currentPlaybackSpeed)
 
                   val params = Bundle().apply {
@@ -1290,12 +1304,12 @@ jobs:
                   val systemPrompt = """
                   You are a Netflix Indian dubbing director.
                   Translate movie dialogue into natural everyday spoken Indian Hinglish in Devanagari script.
-                  
+
                   CRITICAL RULES:
                   1. Keep conversational English words naturally in Devanagari ('सुपरमैन', 'कमांडर', 'अटैक', 'बैरिकेड', 'प्लान', 'वेट', 'प्रॉब्लम', 'ओके').
                   2. Default speaker is '$selectedVoiceGender'.
                   3. Deliver punchy, natural, conversational lines suitable for audio dubbing.
-                  
+
                   Output strictly a JSON array of objects:
                      [{"text": "रूपांतरित संवाद", "speaker": "man"}]
                   """.trimIndent()
